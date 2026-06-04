@@ -1,4 +1,5 @@
 from rest_framework.routers import DefaultRouter
+from django.urls import path
 
 from .views import (
     AIErrLogViewSet,
@@ -10,10 +11,13 @@ from .views import (
     AuditEventViewSet,
     CareTeamMembershipViewSet,
     ClinicalTaskViewSet,
+    CurrentUserView,
     DepartmentViewSet,
     DiagnosticOrderViewSet,
     EncounterViewSet,
     HospitalViewSet,
+    LoginView,
+    LogoutView,
     MedicalRecordViewSet,
     OrganizationViewSet,
     PatientAllergyViewSet,
@@ -23,6 +27,7 @@ from .views import (
     PatronageVisitViewSet,
     PerinatalRegistryEntryViewSet,
     ReferralViewSet,
+    RegisterView,
     RoomViewSet,
     StaffProfileViewSet,
 )
@@ -54,4 +59,10 @@ router.register("ai-error-logs", AIErrLogViewSet)
 router.register("feedback", AnonymousFeedbackViewSet)
 router.register("audit-events", AuditEventViewSet)
 
-urlpatterns = router.urls
+urlpatterns = [
+    path("auth/me/", CurrentUserView.as_view(), name="auth-me"),
+    path("auth/login/", LoginView.as_view(), name="auth-login"),
+    path("auth/logout/", LogoutView.as_view(), name="auth-logout"),
+    path("auth/register/", RegisterView.as_view(), name="auth-register"),
+    *router.urls,
+]

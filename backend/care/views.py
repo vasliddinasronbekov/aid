@@ -1,4 +1,5 @@
 from django.conf import settings
+from django.contrib.auth import login, logout
 from django.db import models, transaction
 from django.db.models import Avg, Count, Max
 from django.utils import timezone
@@ -6,6 +7,7 @@ from rest_framework import permissions, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.response import Response
+from rest_framework.views import APIView
 
 from .audit import record_audit_event
 from .models import (
@@ -51,6 +53,7 @@ from .serializers import (
     AccessGrantSerializer,
     AdmissionSerializer,
     AnonymousFeedbackSerializer,
+    AuthUserSerializer,
     AppointmentSerializer,
     AuditEventSerializer,
     CareTeamMembershipSerializer,
@@ -70,6 +73,8 @@ from .serializers import (
     PhoneVerificationRequestSerializer,
     PhoneVerificationVerifySerializer,
     ReferralSerializer,
+    LoginSerializer,
+    RegisterSerializer,
     RoomSerializer,
     StaffProfileSerializer,
 )
@@ -175,6 +180,42 @@ def patient_from_clinical_links(validated_data: dict, instance=None) -> Patient 
     if instance is not None:
         return getattr(instance, "patient", None)
     return None
+
+
+class CurrentUserView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request):
+        return Response(AuthUserSerializer(request.user).data)
+
+
+class LoginView(APIView):
+    permission_classes = [permissions.AllowAny]
+
+    def post(self, request):
+        serializer = LoginSerializer(data=request.data, context={"request": request})
+        serializer.is_valid(raise_exception=True)
+        login(request, serializer.validated_data["user"])
+        return Response(AuthUserSerializer(serializer.validated_data["user"]).data)
+
+
+class LogoutView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request):
+        logout(request)
+        return Response({"status": "ok"})
+
+
+class RegisterView(APIView):
+    permission_classes = [permissions.AllowAny]
+
+    def post(self, request):
+        serializer = RegisterSerializer(data=request.data, context={"request": request})
+        serializer.is_valid(raise_exception=True)
+        user = serializer.save()
+        login(request, user)
+        return Response(AuthUserSerializer(user).data, status=status.HTTP_201_CREATED)
 
 
 class OrganizationViewSet(TenantScopedQuerysetMixin, AuditReadMixin, viewsets.ModelViewSet):

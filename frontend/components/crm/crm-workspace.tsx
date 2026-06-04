@@ -44,11 +44,32 @@ import {
   WifiOff,
   XCircle,
 } from "lucide-react";
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import { AIAssistantDock } from "@/components/crm/ai-assistant-dock";
 import { RealtimeMessage, useWebSockets } from "@/hooks/useWebSockets";
-import { notificationsUrl } from "@/lib/api";
+import { useAuthGate } from "@/hooks/useAuth";
+import {
+  cancelAppointment,
+  completeAppointment,
+  createAppointment,
+  createMedicalRecord,
+  createPatient,
+  listAppointments,
+  listPatients,
+  notificationsUrl,
+  rescheduleAppointment,
+  startAppointment,
+} from "@/lib/api";
+import type {
+  AppointmentPayload,
+  BackendAppointment,
+  BackendAppointmentPriority,
+  BackendAppointmentType,
+  MedicalRecordPayload,
+  Patient,
+  PatientPayload,
+} from "@/lib/api";
 import {
   appointments,
   Appointment,
@@ -102,9 +123,11 @@ interface AppointmentClinicalInput {
 }
 
 interface AppointmentSafetyReview {
-  status: "queued";
+  status: "queued" | "submitted" | "sync_failed";
   submittedAt: string;
   hiddenFromDoctor: true;
+  backendRecordId?: number;
+  fallbackReason?: string;
 }
 
 const emptyClinicalInput: AppointmentClinicalInput = {
@@ -282,19 +305,36 @@ const patronageSyncStyles: Record<PatronageRow["sync"], string> = {
   "Qayta ko'rish": "border-blue-200 bg-blue-50 text-clinical-blue",
 };
 
+function WorkspaceLoading({ label }: { label: string }) {
+  return (
+    <main className="flex min-h-screen items-center justify-center bg-clinical-wash px-4 text-clinical-ink">
+      <div className="rounded-md border border-clinical-line bg-white px-5 py-4 text-sm text-clinical-slate shadow-sm">
+        {label}
+      </div>
+    </main>
+  );
+}
+
 export function CrmWorkspace({ module, content: customContent, headerTitle, headerSubtitle }: CrmWorkspaceProps) {
   const activeModule = isCrmModule(module) ? module : "assigned-population";
   const pathname = usePathname();
   const [query, setQuery] = useState("");
   const [networkOnline, setNetworkOnline] = useState(true);
   const [assistantDockOpen, setAssistantDockOpen] = useState(false);
+  const { user, loading: authLoading, signOut } = useAuthGate();
   const { status: socketStatus } = useWebSockets<RealtimeMessage>({
     url: notificationsUrl("regional_doctor", "andijan-central"),
   });
 
-  const content = customContent ?? renderModule(activeModule, query);
   const title = headerTitle ?? moduleLabel(activeModule);
   const subtitle = headerSubtitle ?? "Andijon tuman Qo'nji oilaviy shifokorlik punkti";
+  const currentUserName = user?.display_name || user?.username || "Staff user";
+
+  if (authLoading) {
+    return <WorkspaceLoading label="Clinical workspace loading" />;
+  }
+
+  const content = customContent ?? renderModule(activeModule, query, currentUserName);
 
   return (
     <main className="min-h-screen bg-clinical-wash text-clinical-ink">
@@ -435,13 +475,18 @@ export function CrmWorkspace({ module, content: customContent, headerTitle, head
                   <Languages className="h-4 w-4" />
                   O'zbekcha
                 </span>
-                <button className="inline-flex min-w-0 items-center gap-2 rounded-md border border-transparent bg-clinical-wash px-3 py-2 text-left shadow-sm hover:bg-white">
+                <button
+                  type="button"
+                  onClick={() => void signOut()}
+                  className="inline-flex min-w-0 items-center gap-2 rounded-md border border-transparent bg-clinical-wash px-3 py-2 text-left shadow-sm hover:bg-white"
+                  title="Logout"
+                >
                   <UserRound className="h-4 w-4 shrink-0 text-clinical-blue" />
                   <span className="hidden min-w-0 xl:block">
                     <span className="block truncate text-xs font-semibold text-clinical-ink">
-                      AZIMOV XOJI AKBAR KOBILJON O'G'LI
+                      {currentUserName}
                     </span>
-                    <span className="block truncate text-[11px] text-clinical-slate">Batafsil</span>
+                    <span className="block truncate text-[11px] text-clinical-slate">{user?.staff_profile?.role || "Account"}</span>
                   </span>
                   <ChevronDown className="h-4 w-4 shrink-0 text-slate-400" />
                 </button>
@@ -478,7 +523,7 @@ export function CrmWorkspace({ module, content: customContent, headerTitle, head
   );
 }
 
-function renderModule(module: CrmModuleKey, query: string) {
+function renderModule(module: CrmModuleKey, query: string, currentUserName = "Clinical user") {
   if (
     module === "appointments" ||
     module === "active-appointments" ||
@@ -518,7 +563,7 @@ function renderModule(module: CrmModuleKey, query: string) {
   if (module === "settings") {
     return <SettingsView />;
   }
-  return <PatientRegistryView query={query} module={module} />;
+  return <PatientRegistryView query={query} module={module} currentUserName={currentUserName} />;
 }
 
 function StatCard({
@@ -552,13 +597,135 @@ function StatCard({
   );
 }
 
-function PatientRegistryView({ query, module }: { query: string; module: CrmModuleKey }) {
-  const [patients, setPatients] = useState<RegistryPatient[]>(registryPatients);
+function formatBackendDate(value?: string | null) {
+  if (!value) {
+    return "";
+  }
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return value.slice(0, 10);
+  }
+  return date.toISOString().slice(0, 10);
+}
+
+function ageFromDateOfBirth(value?: string | null) {
+  if (!value) {
+    return 0;
+  }
+  const birthDate = new Date(value);
+  if (Number.isNaN(birthDate.getTime())) {
+    return 0;
+  }
+  const today = new Date();
+  let age = today.getFullYear() - birthDate.getFullYear();
+  const monthDelta = today.getMonth() - birthDate.getMonth();
+  if (monthDelta < 0 || (monthDelta === 0 && today.getDate() < birthDate.getDate())) {
+    age -= 1;
+  }
+  return Math.max(age, 0);
+}
+
+function biomarkerText(patient: Patient, key: string, fallback = "") {
+  const value = patient.chronic_biomarkers?.[key];
+  if (Array.isArray(value)) {
+    return value.join(", ");
+  }
+  if (typeof value === "number" || typeof value === "boolean") {
+    return String(value);
+  }
+  if (typeof value === "string") {
+    return value;
+  }
+  return fallback;
+}
+
+function registryPatientFromBackend(patient: Patient): RegistryPatient {
+  const healthGroup = biomarkerText(patient, "health_group", "Yo'q");
+  const normalizedHealthGroup =
+    healthGroup === "I" || healthGroup === "II" || healthGroup === "III" || healthGroup === "Yo'q" ? healthGroup : "Yo'q";
+  const diagnosis =
+    biomarkerText(patient, "primary_diagnosis") ||
+    patient.severe_chronic_tags.join(", ") ||
+    patient.department ||
+    "Klinik tashxis kiritilmagan";
+
+  return {
+    id: patient.id,
+    medicalCard: patient.medical_record_number || patient.patient_identifier,
+    fullName: patient.display_name,
+    territory: patient.district || patient.region_code,
+    age: ageFromDateOfBirth(patient.date_of_birth),
+    healthGroup: normalizedHealthGroup,
+    cardiovascularRisk: biomarkerText(patient, "cardiovascular_risk", ""),
+    diabetesRisk: biomarkerText(patient, "diabetes_risk", ""),
+    oncologySurvey: biomarkerText(patient, "oncology_survey") === "done" ? "O'tilgan" : "O'tilmagan",
+    dList: biomarkerText(patient, "d_list", "Yo'q"),
+    disability: biomarkerText(patient, "disability", "Yo'q"),
+    clinicalDiagnosis: diagnosis,
+    phone: patient.phone_number,
+    address: patient.address_line,
+    lastVisit: formatBackendDate(patient.updated_at),
+    nextVisit: biomarkerText(patient, "next_visit_at", ""),
+    assignedDoctor: patient.department_name || patient.department || "Belgilanmagan",
+    patronageNurse: biomarkerText(patient, "patronage_nurse", "Belgilanmagan"),
+    riskZone: patient.triage_status,
+    tags: [patient.triage_status, ...patient.severe_chronic_tags].filter(Boolean),
+  };
+}
+
+function splitPatientName(fullName: string) {
+  const parts = fullName.trim().split(/\s+/).filter(Boolean);
+  const firstName = parts.shift() || fullName.trim();
+  const lastName = parts.join(" ") || "-";
+  return { firstName, lastName };
+}
+
+function patientPayloadFromDraft(draft: {
+  fullName: string;
+  age: string;
+  phone: string;
+  territory: string;
+  clinicalDiagnosis: string;
+  riskZone: RegistryPatient["riskZone"];
+  healthGroup: RegistryPatient["healthGroup"];
+}): PatientPayload {
+  const { firstName, lastName } = splitPatientName(draft.fullName);
+  const age = Number.parseInt(draft.age, 10);
+  const birthYear = Number.isFinite(age) && age > 0 ? new Date().getFullYear() - age : null;
+  return {
+    first_name: firstName,
+    last_name: lastName,
+    date_of_birth: birthYear ? `${birthYear}-01-01` : null,
+    phone_number: draft.phone.trim(),
+    region_code: draft.territory.trim() || "andijan-central",
+    district: draft.territory.trim(),
+    department: "Primary care",
+    triage_status: draft.riskZone,
+    chronic_biomarkers: {
+      health_group: draft.healthGroup,
+      primary_diagnosis: draft.clinicalDiagnosis.trim(),
+      d_list: draft.clinicalDiagnosis.trim() || "Yo'q",
+    },
+  };
+}
+
+function PatientRegistryView({
+  query,
+  module,
+  currentUserName,
+}: {
+  query: string;
+  module: CrmModuleKey;
+  currentUserName: string;
+}) {
+  const [patients, setPatients] = useState<RegistryPatient[]>([]);
   const [filter, setFilter] = useState<PatientFilter>("Barchasi");
-  const [selectedPatientId, setSelectedPatientId] = useState(registryPatients[0].id);
+  const [selectedPatientId, setSelectedPatientId] = useState(0);
   const [note, setNote] = useState("");
   const [saveState, setSaveState] = useState<"idle" | "saved">("idle");
-  const [duplicateRows, setDuplicateRows] = useState(duplicateCandidates);
+  const [duplicateRows, setDuplicateRows] = useState<typeof duplicateCandidates>([]);
+  const [patientLoading, setPatientLoading] = useState(true);
+  const [patientError, setPatientError] = useState("");
   const [patientCreateOpen, setPatientCreateOpen] = useState(false);
   const [patientDraft, setPatientDraft] = useState({
     fullName: "",
@@ -590,6 +757,39 @@ function PatientRegistryView({ query, module }: { query: string; module: CrmModu
     });
   }, [query, filter, patients]);
 
+  useEffect(() => {
+    let active = true;
+
+    setPatientLoading(true);
+    listPatients()
+      .then((response) => {
+        if (!active) {
+          return;
+        }
+        const mappedPatients = response.results.map(registryPatientFromBackend);
+        setPatients(mappedPatients);
+        setSelectedPatientId((current) => (mappedPatients.some((patient) => patient.id === current) ? current : mappedPatients[0]?.id ?? 0));
+        setPatientError("");
+      })
+      .catch((error) => {
+        if (!active) {
+          return;
+        }
+        setPatients([]);
+        setSelectedPatientId(0);
+        setPatientError(error instanceof Error ? error.message : "Patients API is not available.");
+      })
+      .finally(() => {
+        if (active) {
+          setPatientLoading(false);
+        }
+      });
+
+    return () => {
+      active = false;
+    };
+  }, []);
+
   const selectedPatient =
     filteredPatients.find((patient) => patient.id === selectedPatientId) ??
     patients.find((patient) => patient.id === selectedPatientId) ??
@@ -599,63 +799,67 @@ function PatientRegistryView({ query, module }: { query: string; module: CrmModu
   const pageTitle =
     module === "patients" ? "Bemorlar" : module === "my-patients" ? "Mening bemorlarim" : "Biriktirilgan aholi";
 
-  const saveClinicalNote = () => {
-    globalThis.localStorage?.setItem(
-      `crm-patient-note:${selectedPatient.id}`,
-      JSON.stringify({ patientId: selectedPatient.id, note, savedAt: new Date().toISOString() }),
-    );
-    setSaveState("saved");
+  const saveClinicalNote = async () => {
+    if (!selectedPatient || !note.trim()) {
+      return;
+    }
+    setSaveState("idle");
+    try {
+      await createMedicalRecord({
+        patient: selectedPatient.id,
+        doctor_id: currentUserName,
+        diagnosis: selectedPatient.clinicalDiagnosis,
+        prescriptions: "",
+        clinical_notes: note.trim(),
+        record_type: "FOLLOW_UP",
+        imaging_safety_metadata: {
+          source: "patient_registry_note",
+          patient_snapshot: {
+            medical_card: selectedPatient.medicalCard,
+            risk_zone: selectedPatient.riskZone,
+          },
+        },
+      });
+      setSaveState("saved");
+      setPatientError("");
+    } catch (error) {
+      setPatientError(error instanceof Error ? error.message : "Clinical note could not be saved.");
+    }
   };
 
-  const selectedDuplicates = duplicateRows.filter(
-    (candidate) => candidate.primaryPatientId === selectedPatient.id || candidate.duplicatePatientId === selectedPatient.id,
-  );
+  const selectedDuplicates = selectedPatient
+    ? duplicateRows.filter((candidate) => candidate.primaryPatientId === selectedPatient.id || candidate.duplicatePatientId === selectedPatient.id)
+    : [];
   const updateDuplicateStatus = (candidateId: number, statusValue: (typeof duplicateCandidates)[number]["status"]) => {
     setDuplicateRows((current) => current.map((candidate) => (candidate.id === candidateId ? { ...candidate, status: statusValue } : candidate)));
   };
 
-  const addPatient = (event: FormEvent<HTMLFormElement>) => {
+  const addPatient = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const fullName = patientDraft.fullName.trim();
     if (!fullName) {
       return;
     }
-    const nextId = Math.max(...patients.map((patient) => patient.id), 0) + 1;
-    const patient: RegistryPatient = {
-      id: nextId,
-      medicalCard: `AT-${String(nextId).padStart(6, "0")}`,
-      fullName,
-      territory: patientDraft.territory,
-      age: Number.parseInt(patientDraft.age, 10) || 0,
-      healthGroup: patientDraft.healthGroup,
-      cardiovascularRisk: patientDraft.riskZone === "RED" ? "15 %" : patientDraft.riskZone === "YELLOW" ? "7 %" : "...",
-      diabetesRisk: patientDraft.riskZone === "GREEN" ? "..." : "5",
-      oncologySurvey: "O'tilmagan",
-      dList: patientDraft.clinicalDiagnosis.trim() ? patientDraft.clinicalDiagnosis.trim() : "Yo'q",
-      disability: "Yo'q",
-      clinicalDiagnosis: patientDraft.clinicalDiagnosis.trim() || "Yangi bemor",
-      phone: patientDraft.phone.trim() || "+998",
-      address: "Manzil kiritilmagan",
-      lastVisit: "2026-06-04",
-      nextVisit: "2026-06-11",
-      assignedDoctor: "Azimov Xoji Akbar",
-      patronageNurse: "Belgilanmagan",
-      riskZone: patientDraft.riskZone,
-      tags: patientDraft.riskZone === "RED" ? ["Yuqori xavf", "Yangi"] : ["Yangi"],
-    };
-    setPatients((current) => [patient, ...current]);
-    setSelectedPatientId(patient.id);
-    setFilter("Barchasi");
-    setPatientCreateOpen(false);
-    setPatientDraft({
-      fullName: "",
-      age: "35",
-      phone: "",
-      territory: "1- тиббий бригада",
-      clinicalDiagnosis: "",
-      riskZone: "YELLOW",
-      healthGroup: "II",
-    });
+    try {
+      const createdPatient = await createPatient(patientPayloadFromDraft(patientDraft));
+      const patient = registryPatientFromBackend(createdPatient);
+      setPatients((current) => [patient, ...current]);
+      setSelectedPatientId(patient.id);
+      setFilter("Barchasi");
+      setPatientCreateOpen(false);
+      setPatientDraft({
+        fullName: "",
+        age: "35",
+        phone: "",
+        territory: "1- тиббий бригада",
+        clinicalDiagnosis: "",
+        riskZone: "YELLOW",
+        healthGroup: "II",
+      });
+      setPatientError("");
+    } catch (error) {
+      setPatientError(error instanceof Error ? error.message : "Patient could not be created.");
+    }
   };
 
   return (
@@ -665,7 +869,7 @@ function PatientRegistryView({ query, module }: { query: string; module: CrmModu
           <StatCard label="Biriktirilgan aholi" value={String(patients.length)} icon={UsersRound} />
           <StatCard label="Yuqori xavf" value={String(patients.filter((patient) => patient.riskZone === "RED").length)} icon={AlertTriangle} tone="red" />
           <StatCard label="D-ro'yxat" value={String(patients.filter((patient) => patient.dList !== "Yo'q").length)} icon={ClipboardCheck} tone="amber" />
-          <StatCard label="Bugungi qabullar" value="8" icon={CalendarDays} tone="green" />
+          <StatCard label="Bugun yangilangan" value={String(patients.filter((patient) => patient.lastVisit === formatBackendDate(new Date().toISOString())).length)} icon={CalendarDays} tone="green" />
         </div>
 
         <section className="rounded-md border border-clinical-line bg-white shadow-sm">
@@ -700,6 +904,12 @@ function PatientRegistryView({ query, module }: { query: string; module: CrmModu
               </button>
             </div>
           </div>
+
+          {patientError ? (
+            <div className="border-b border-red-100 bg-red-50 px-4 py-3 text-sm text-red-900">
+              {patientError}
+            </div>
+          ) : null}
 
           {patientCreateOpen ? (
             <form onSubmit={addPatient} className="grid gap-3 border-b border-clinical-line bg-slate-50 px-4 py-4 lg:grid-cols-6">
@@ -806,8 +1016,15 @@ function PatientRegistryView({ query, module }: { query: string; module: CrmModu
                 </tr>
               </thead>
               <tbody className="divide-y divide-clinical-line">
-                {filteredPatients.map((patient, index) => {
-                  const active = patient.id === selectedPatient.id;
+                {patientLoading ? (
+                  <tr>
+                    <td colSpan={13} className="px-4 py-8 text-center text-clinical-slate">
+                      Backend bemorlar ro'yxati yuklanmoqda.
+                    </td>
+                  </tr>
+                ) : filteredPatients.length ? (
+                  filteredPatients.map((patient, index) => {
+                    const active = patient.id === selectedPatient?.id;
                   return (
                     <tr key={patient.id} className={active ? "bg-blue-50/70" : "bg-white hover:bg-slate-50"}>
                       <td className="px-4 py-3 text-clinical-slate">{index + 1}</td>
@@ -873,7 +1090,14 @@ function PatientRegistryView({ query, module }: { query: string; module: CrmModu
                       </td>
                     </tr>
                   );
-                })}
+                  })
+                ) : (
+                  <tr>
+                    <td colSpan={13} className="px-4 py-8 text-center text-clinical-slate">
+                      Backendda bemor topilmadi. Yangi bemor qo'shish uchun Bemor tugmasini bosing.
+                    </td>
+                  </tr>
+                )}
               </tbody>
             </table>
           </div>
@@ -882,62 +1106,70 @@ function PatientRegistryView({ query, module }: { query: string; module: CrmModu
 
       <aside className="space-y-4">
         <section className="rounded-md border border-clinical-line bg-white shadow-sm">
-          <div className="border-b border-clinical-line px-4 py-4">
-            <div className="flex items-start justify-between gap-3">
-              <div className="min-w-0">
-                <h2 className="truncate text-base font-semibold text-clinical-ink">{selectedPatient.fullName}</h2>
-                <p className="mt-1 text-sm text-clinical-slate">{selectedPatient.medicalCard}</p>
+          {selectedPatient ? (
+            <>
+              <div className="border-b border-clinical-line px-4 py-4">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <h2 className="truncate text-base font-semibold text-clinical-ink">{selectedPatient.fullName}</h2>
+                    <p className="mt-1 text-sm text-clinical-slate">{selectedPatient.medicalCard}</p>
+                  </div>
+                  <span className={`shrink-0 rounded-md border px-2.5 py-1 text-xs font-semibold ${zoneStyles[selectedPatient.riskZone]}`}>
+                    {selectedPatient.riskZone}
+                  </span>
+                </div>
               </div>
-              <span className={`shrink-0 rounded-md border px-2.5 py-1 text-xs font-semibold ${zoneStyles[selectedPatient.riskZone]}`}>
-                {selectedPatient.riskZone}
-              </span>
-            </div>
-          </div>
-          <div className="space-y-4 p-4">
-            <div className="grid grid-cols-2 gap-2 text-sm">
-              <Info label="Hudud" value={selectedPatient.territory} />
-              <Info label="Yosh" value={`${selectedPatient.age} yosh`} />
-              <Info label="Telefon" value={selectedPatient.phone} />
-              <Info label="Keyingi ko'rik" value={selectedPatient.nextVisit} />
-              <Info label="Shifokor" value={selectedPatient.assignedDoctor} />
-              <Info label="Patronaj" value={selectedPatient.patronageNurse} />
-            </div>
+              <div className="space-y-4 p-4">
+                <div className="grid grid-cols-2 gap-2 text-sm">
+                  <Info label="Hudud" value={selectedPatient.territory} />
+                  <Info label="Yosh" value={`${selectedPatient.age} yosh`} />
+                  <Info label="Telefon" value={selectedPatient.phone} />
+                  <Info label="Keyingi ko'rik" value={selectedPatient.nextVisit} />
+                  <Info label="Shifokor" value={selectedPatient.assignedDoctor} />
+                  <Info label="Patronaj" value={selectedPatient.patronageNurse} />
+                </div>
 
-            <div className="rounded-md border border-clinical-line bg-slate-50 p-3">
-              <p className="text-xs font-semibold uppercase text-clinical-slate">Kl. tashxis</p>
-              <p className="mt-1 text-sm font-medium text-clinical-ink">{selectedPatient.clinicalDiagnosis}</p>
-              <p className="mt-2 text-sm text-clinical-slate">{selectedPatient.address}</p>
-            </div>
+                <div className="rounded-md border border-clinical-line bg-slate-50 p-3">
+                  <p className="text-xs font-semibold uppercase text-clinical-slate">Kl. tashxis</p>
+                  <p className="mt-1 text-sm font-medium text-clinical-ink">{selectedPatient.clinicalDiagnosis}</p>
+                  <p className="mt-2 text-sm text-clinical-slate">{selectedPatient.address}</p>
+                </div>
 
-            <label className="block">
-              <span className="mb-2 block text-sm font-medium text-clinical-ink">Qabul yozuvi</span>
-              <textarea
-                value={note}
-                onChange={(event) => {
-                  setNote(event.target.value);
-                  setSaveState("idle");
-                }}
-                rows={4}
-                className="w-full rounded-md border border-clinical-line px-3 py-3 text-sm focus:border-clinical-blue"
-                placeholder="Shikoyat, ko'rik, reja"
-              />
-            </label>
+                <label className="block">
+                  <span className="mb-2 block text-sm font-medium text-clinical-ink">Qabul yozuvi</span>
+                  <textarea
+                    value={note}
+                    onChange={(event) => {
+                      setNote(event.target.value);
+                      setSaveState("idle");
+                    }}
+                    rows={4}
+                    className="w-full rounded-md border border-clinical-line px-3 py-3 text-sm focus:border-clinical-blue"
+                    placeholder="Shikoyat, ko'rik, reja"
+                  />
+                </label>
 
-            <div className="grid grid-cols-2 gap-2">
-              <button className="inline-flex h-10 items-center justify-center gap-2 rounded-md border border-clinical-line bg-white text-sm font-semibold text-clinical-ink">
-                <Printer className="h-4 w-4" />
-                Chop etish
-              </button>
-              <button
-                type="button"
-                onClick={saveClinicalNote}
-                className="inline-flex h-10 items-center justify-center gap-2 rounded-md bg-clinical-blue text-sm font-semibold text-white"
-              >
-                <Save className="h-4 w-4" />
-                {saveState === "saved" ? "Saqlandi" : "Saqlash"}
-              </button>
+                <div className="grid grid-cols-2 gap-2">
+                  <button className="inline-flex h-10 items-center justify-center gap-2 rounded-md border border-clinical-line bg-white text-sm font-semibold text-clinical-ink">
+                    <Printer className="h-4 w-4" />
+                    Chop etish
+                  </button>
+                  <button
+                    type="button"
+                    onClick={saveClinicalNote}
+                    className="inline-flex h-10 items-center justify-center gap-2 rounded-md bg-clinical-blue text-sm font-semibold text-white"
+                  >
+                    <Save className="h-4 w-4" />
+                    {saveState === "saved" ? "Saqlandi" : "Saqlash"}
+                  </button>
+                </div>
+              </div>
+            </>
+          ) : (
+            <div className="p-4 text-sm text-clinical-slate">
+              Backenddan bemor tanlang yoki yangi bemor yarating.
             </div>
-          </div>
+          )}
         </section>
 
         <section className="rounded-md border border-clinical-line bg-white p-4 shadow-sm">
@@ -949,7 +1181,7 @@ function PatientRegistryView({ query, module }: { query: string; module: CrmModu
                   <div className="flex items-start justify-between gap-3">
                     <div className="min-w-0">
                       <p className="truncate text-sm font-semibold text-clinical-ink">
-                        {candidate.primaryPatientId === selectedPatient.id ? candidate.duplicatePatient : candidate.primaryPatient}
+                        {candidate.primaryPatientId === selectedPatient?.id ? candidate.duplicatePatient : candidate.primaryPatient}
                       </p>
                       <p className="mt-1 text-xs text-clinical-slate">{candidate.reasons.slice(0, 2).join(", ")}</p>
                     </div>
@@ -1006,6 +1238,127 @@ function addMinutes(time: string, minutesToAdd: number) {
   return `${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
 }
 
+function backendStatusToAppointmentStatus(status: BackendAppointment["status"]): Appointment["status"] {
+  if (status === "COMPLETED") {
+    return "Bajarildi";
+  }
+  if (status === "CANCELLED" || status === "NO_SHOW") {
+    return "Bekor qilingan";
+  }
+  return "Aktiv";
+}
+
+function backendPriorityToAppointmentPriority(priority: BackendAppointmentPriority): Appointment["priority"] {
+  if (priority === "URGENT" || priority === "CRITICAL") {
+    return "Yuqori";
+  }
+  if (priority === "SOON") {
+    return "O'rta";
+  }
+  return "Past";
+}
+
+function appointmentPriorityToBackend(priority: Appointment["priority"]): BackendAppointmentPriority {
+  if (priority === "Yuqori") {
+    return "URGENT";
+  }
+  if (priority === "O'rta") {
+    return "SOON";
+  }
+  return "ROUTINE";
+}
+
+function appointmentTypeFromDepartment(department: string): BackendAppointmentType {
+  const normalized = normalizeText(department);
+  if (normalized.includes("homilador")) {
+    return "PERINATAL";
+  }
+  if (normalized.includes("laboratoriya")) {
+    return "LAB";
+  }
+  if (normalized.includes("patronaj")) {
+    return "PATRONAGE";
+  }
+  if (normalized.includes("mrt") || normalized.includes("kt") || normalized.includes("imaging")) {
+    return "IMAGING";
+  }
+  return "PRIMARY_CARE";
+}
+
+function departmentFromAppointmentType(type: BackendAppointmentType, departmentName: string) {
+  if (departmentName) {
+    return departmentName;
+  }
+  const labels: Record<BackendAppointmentType, string> = {
+    PRIMARY_CARE: "Primary care",
+    FOLLOW_UP: "Follow up",
+    PATRONAGE: "Patronaj",
+    PERINATAL: "Homiladorlar",
+    LAB: "Laboratoriya",
+    IMAGING: "Tasvirlash",
+    SPECIALIST: "Mutaxassis",
+    EMERGENCY: "Shoshilinch",
+  };
+  return labels[type];
+}
+
+function localDateInputValue() {
+  return new Date().toISOString().slice(0, 10);
+}
+
+function scheduledDateTime(date: string, time: string) {
+  return `${date}T${time}:00+05:00`;
+}
+
+function addMinutesToScheduledDateTime(date: string, time: string, minutesToAdd: number) {
+  const value = new Date(scheduledDateTime(date, time));
+  value.setMinutes(value.getMinutes() + minutesToAdd);
+  return value.toISOString();
+}
+
+function appointmentFromBackend(appointment: BackendAppointment): Appointment {
+  const scheduled = new Date(appointment.scheduled_start);
+  const validDate = !Number.isNaN(scheduled.getTime());
+  return {
+    id: appointment.id,
+    patientId: appointment.patient,
+    date: validDate ? scheduled.toISOString().slice(0, 10) : appointment.scheduled_start.slice(0, 10),
+    time: validDate
+      ? `${String(scheduled.getHours()).padStart(2, "0")}:${String(scheduled.getMinutes()).padStart(2, "0")}`
+      : appointment.scheduled_start.slice(11, 16),
+    patient: appointment.patient_name,
+    department: departmentFromAppointmentType(appointment.appointment_type, appointment.department_name),
+    doctor: appointment.provider_name || appointment.created_by_name,
+    status: backendStatusToAppointmentStatus(appointment.status),
+    priority: backendPriorityToAppointmentPriority(appointment.priority),
+    reason: appointment.reason,
+    room: appointment.room_label || "",
+    notes: appointment.notes,
+  };
+}
+
+function appointmentPayloadFromDraft(
+  patient: RegistryPatient,
+  draft: {
+    date: string;
+    time: string;
+    department: string;
+    reason: string;
+    priority: Appointment["priority"];
+  },
+): AppointmentPayload {
+  return {
+    patient: patient.id,
+    appointment_type: appointmentTypeFromDepartment(draft.department),
+    status: "IN_PROGRESS",
+    priority: appointmentPriorityToBackend(draft.priority),
+    scheduled_start: scheduledDateTime(draft.date, draft.time),
+    scheduled_end: addMinutesToScheduledDateTime(draft.date, draft.time, 30),
+    reason: draft.reason.trim(),
+    notes: "",
+  };
+}
+
 const clinicalFieldLabels: Array<{ key: keyof AppointmentClinicalInput; label: string }> = [
   { key: "complaint", label: "Shikoyat" },
   { key: "diagnosis", label: "Tashxis" },
@@ -1021,6 +1374,8 @@ const clinicalFieldLabels: Array<{ key: keyof AppointmentClinicalInput; label: s
 
 const safetyReviewStatusStyles = {
   queued: "border-slate-200 bg-slate-50 text-clinical-slate",
+  submitted: "border-emerald-200 bg-emerald-50 text-emerald-900",
+  sync_failed: "border-amber-200 bg-amber-50 text-amber-900",
 };
 
 function filledClinicalRows(input?: AppointmentClinicalInput) {
@@ -1032,6 +1387,74 @@ function filledClinicalRows(input?: AppointmentClinicalInput) {
     .filter((field) => Boolean(field.value));
 }
 
+function appointmentTextContainsPregnancy(text: string) {
+  const normalized = normalizeText(text);
+  return normalized.includes("homilador") || normalized.includes("preg") || normalized.includes("gravid");
+}
+
+function buildMedicalRecordPayload(
+  patient: RegistryPatient,
+  appointment: Appointment,
+  clinical: AppointmentClinicalInput,
+): MedicalRecordPayload {
+  const clinicalRows = filledClinicalRows(clinical);
+  const hasImaging = Boolean(
+    clinical.ctFindings.trim() || clinical.mrtFindings.trim() || clinical.ultrasoundFindings.trim(),
+  );
+  const freeText = [
+    appointment.department,
+    appointment.reason,
+    patient.clinicalDiagnosis,
+    ...clinicalRows.map((row) => row.value),
+  ].join("\n");
+  const pregnancyContext = appointmentTextContainsPregnancy(freeText);
+  const clinicalNotes = [
+    `Qabul: ${appointment.date} ${appointment.time}`,
+    `Bo'lim: ${appointment.department}`,
+    `Ustuvorlik: ${appointment.priority}`,
+    `Sabab: ${appointment.reason}`,
+    `Bemor xavf zonasi: ${patient.riskZone}`,
+    ...clinicalRows.map((row) => `${row.label}: ${row.value}`),
+  ].join("\n");
+
+  return {
+    patient: patient.id,
+    doctor_id: appointment.doctor,
+    diagnosis: clinical.diagnosis.trim() || patient.clinicalDiagnosis || appointment.reason,
+    prescriptions: clinical.prescriptions.trim(),
+    clinical_notes: clinicalNotes,
+    record_type: hasImaging ? "IMAGING" : "CONSULTATION",
+    imaging_safety_metadata: {
+      source: "doctor_qabul",
+      local_appointment_id: appointment.id,
+      room: appointment.room,
+      consent_confirmed: false,
+      modality: [
+        clinical.ctFindings.trim() ? "CT" : "",
+        clinical.mrtFindings.trim() ? "MRT" : "",
+        clinical.ultrasoundFindings.trim() ? "USG" : "",
+      ]
+        .filter(Boolean)
+        .join(", "),
+      notes: [
+        clinical.ctFindings.trim() ? `CT: ${clinical.ctFindings.trim()}` : "",
+        clinical.mrtFindings.trim() ? `MRT: ${clinical.mrtFindings.trim()}` : "",
+        clinical.ultrasoundFindings.trim() ? `USG: ${clinical.ultrasoundFindings.trim()}` : "",
+        pregnancyContext ? "pregnancy_context: possible pregnant patient" : "",
+      ]
+        .filter(Boolean)
+        .join("\n"),
+      patient_snapshot: {
+        medical_card: patient.medicalCard,
+        risk_zone: patient.riskZone,
+        health_group: patient.healthGroup,
+        age: patient.age,
+        territory: patient.territory,
+      },
+    },
+  };
+}
+
 function SafetyReviewBadge({ review }: { review?: AppointmentSafetyReview }) {
   if (!review) {
     return (
@@ -1041,10 +1464,11 @@ function SafetyReviewBadge({ review }: { review?: AppointmentSafetyReview }) {
     );
   }
 
+  const label = review.status === "queued" ? "Navbatda" : review.status === "sync_failed" ? "Sync xato" : "Orqa nazorat";
   return (
     <span className={`inline-flex items-center gap-1 rounded-md border px-2 py-1 text-xs font-semibold ${safetyReviewStatusStyles[review.status]}`}>
       <ShieldCheck className="h-3 w-3" />
-      Orqa nazorat
+      {label}
     </span>
   );
 }
@@ -1060,11 +1484,13 @@ function AppointmentsView({ module, query }: { module: CrmModuleKey; query: stri
           ? "Bekor qilingan"
           : "Barchasi";
   const [filter, setFilter] = useState<AppointmentFilter>(initialFilter);
-  const [items, setItems] = useState<Appointment[]>(appointments);
-  const [selectedId, setSelectedId] = useState(appointments[0]?.id ?? 0);
+  const [items, setItems] = useState<Appointment[]>([]);
+  const [selectedId, setSelectedId] = useState(0);
+  const [availablePatients, setAvailablePatients] = useState<RegistryPatient[]>([]);
+  const [appointmentsLoading, setAppointmentsLoading] = useState(true);
   const [draft, setDraft] = useState({
-    patientId: registryPatients[0].id,
-    date: "2026-06-03",
+    patientId: 0,
+    date: localDateInputValue(),
     time: "12:30",
     department: "Oilaviy shifokor",
     reason: "",
@@ -1075,6 +1501,51 @@ function AppointmentsView({ module, query }: { module: CrmModuleKey; query: stri
   const [safetyReviews, setSafetyReviews] = useState<Record<number, AppointmentSafetyReview>>({});
   const [appointmentFormOpen, setAppointmentFormOpen] = useState(true);
   const [appointmentFormMessage, setAppointmentFormMessage] = useState("");
+  const [isSubmittingAppointment, setIsSubmittingAppointment] = useState(false);
+
+  useEffect(() => {
+    let active = true;
+
+    setAppointmentsLoading(true);
+    Promise.all([listPatients(), listAppointments()])
+      .then(([patientResponse, appointmentResponse]) => {
+        if (!active) {
+          return;
+        }
+        const mappedPatients = patientResponse.results.map(registryPatientFromBackend);
+        const mappedAppointments = appointmentResponse.results.map(appointmentFromBackend);
+        setAvailablePatients(mappedPatients);
+        setItems(mappedAppointments);
+        setSelectedId((current) =>
+          mappedAppointments.some((appointment) => appointment.id === current) ? current : mappedAppointments[0]?.id ?? 0,
+        );
+        setDraft((current) => ({
+          ...current,
+          patientId: mappedPatients.some((patient) => patient.id === current.patientId)
+            ? current.patientId
+            : mappedPatients[0]?.id ?? 0,
+        }));
+        setAppointmentFormMessage("");
+      })
+      .catch((error) => {
+        if (!active) {
+          return;
+        }
+        setAvailablePatients([]);
+        setItems([]);
+        setSelectedId(0);
+        setAppointmentFormMessage(error instanceof Error ? error.message : "Appointments API is not available.");
+      })
+      .finally(() => {
+        if (active) {
+          setAppointmentsLoading(false);
+        }
+      });
+
+    return () => {
+      active = false;
+    };
+  }, []);
 
   const filtered = useMemo(() => items.filter((item) => {
     const search = normalizeText(query);
@@ -1087,48 +1558,52 @@ function AppointmentsView({ module, query }: { module: CrmModuleKey; query: stri
   const selected = items.find((item) => item.id === selectedId) ?? filtered[0] ?? items[0];
   const selectedClinicalRows = filledClinicalRows(selected ? clinicalIntakes[selected.id] : undefined);
   const selectedSafetyReview = selected ? safetyReviews[selected.id] : undefined;
+  const appointmentLoadPercent = items.length ? Math.round((items.filter((item) => item.status === "Aktiv").length / items.length) * 100) : 0;
+  const calendarDate = draft.date || localDateInputValue();
 
-  const setStatus = (appointmentId: number, statusValue: Appointment["status"]) => {
-    setItems((current) =>
-      current.map((item) =>
-        item.id === appointmentId
-          ? {
-              ...item,
-              status: statusValue,
-              notes:
-                statusValue === "Bajarildi"
-                  ? "Qabul yakunlandi, ko'rik yozuvi bemor profiliga biriktiriladi."
-                  : statusValue === "Bekor qilingan"
-                    ? "Bekor qilish sababi registrator tomonidan aniqlashtiriladi."
-                    : item.notes,
-            }
-          : item,
-      ),
-    );
+  const setStatus = async (appointmentId: number, statusValue: Appointment["status"]) => {
+    try {
+      const response =
+        statusValue === "Bajarildi"
+          ? await completeAppointment(appointmentId)
+          : statusValue === "Bekor qilingan"
+            ? await cancelAppointment(appointmentId, "Cancelled from CRM")
+            : await startAppointment(appointmentId);
+      const appointment = appointmentFromBackend(response.appointment);
+      setItems((current) => current.map((item) => (item.id === appointmentId ? appointment : item)));
+      setSelectedId(appointment.id);
+      setAppointmentFormMessage("");
+    } catch (error) {
+      setAppointmentFormMessage(error instanceof Error ? error.message : "Appointment status could not be updated.");
+    }
   };
 
-  const rescheduleSelected = () => {
+  const rescheduleSelected = async () => {
     if (!selected) {
       return;
     }
-    setItems((current) =>
-      current.map((item) =>
-        item.id === selected.id
-          ? {
-              ...item,
-              status: "Aktiv",
-              time: addMinutes(item.time, 30),
-              notes: "Qabul vaqti keyingi bo'sh slotga ko'chirildi.",
-            }
-          : item,
-      ),
-    );
+    try {
+      const response = await rescheduleAppointment(
+        selected.id,
+        scheduledDateTime(selected.date, addMinutes(selected.time, 30)),
+        addMinutesToScheduledDateTime(selected.date, addMinutes(selected.time, 30), 30),
+      );
+      const appointment = appointmentFromBackend(response.appointment);
+      setItems((current) => current.map((item) => (item.id === selected.id ? appointment : item)));
+      setSelectedId(appointment.id);
+      setAppointmentFormMessage("");
+    } catch (error) {
+      setAppointmentFormMessage(error instanceof Error ? error.message : "Appointment could not be rescheduled.");
+    }
   };
 
-  const addAppointment = (event: FormEvent<HTMLFormElement>) => {
+  const addAppointment = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     setAppointmentFormMessage("");
-    const patient = registryPatients.find((entry) => entry.id === Number(draft.patientId));
+    if (isSubmittingAppointment) {
+      return;
+    }
+    const patient = availablePatients.find((entry) => entry.id === Number(draft.patientId));
     if (!patient || !draft.reason.trim()) {
       setAppointmentFormOpen(true);
       setAppointmentFormMessage("Qabul yaratish uchun bemor va sabab maydonlari to'ldirilishi kerak.");
@@ -1146,36 +1621,57 @@ function AppointmentsView({ module, query }: { module: CrmModuleKey; query: stri
       prescriptions: draft.prescriptions,
       clinicalNotes: draft.clinicalNotes,
     };
-    const appointment: Appointment = {
-      id: Math.max(...items.map((item) => item.id), 0) + 1,
-      patientId: patient.id,
-      date: draft.date,
-      time: draft.time,
-      patient: patient.fullName,
-      department: draft.department,
-      doctor: patient.assignedDoctor,
-      status: "Aktiv",
-      priority: draft.priority,
-      reason: draft.reason.trim(),
-      room: draft.department === "Patronaj" ? "Uy tashrifi" : "101",
-      notes: clinical.diagnosis.trim()
-        ? `Tashxis: ${clinical.diagnosis.trim()}`
-        : "Yangi qabul klinik ma'lumotlar bilan kiritildi.",
-    };
-    setItems((current) => [appointment, ...current]);
-    setClinicalIntakes((current) => ({ ...current, [appointment.id]: clinical }));
-    setSafetyReviews((current) => ({
-      ...current,
-      [appointment.id]: {
-        status: "queued",
-        submittedAt: new Date().toISOString(),
-        hiddenFromDoctor: true,
-      },
-    }));
-    setSelectedId(appointment.id);
-    setFilter("Barchasi");
-    setDraft((current) => ({ ...current, reason: "", ...emptyClinicalInput }));
-    setAppointmentFormMessage("Qabul saqlandi. Xavfsizlik nazorati orqa fonda ishlaydi; xavfli signal bo'lsa bosh shifokor paneliga yuboriladi.");
+    const submittedAt = new Date().toISOString();
+
+    setIsSubmittingAppointment(true);
+    let createdAppointment: Appointment | null = null;
+    try {
+      const backendAppointment = await createAppointment(appointmentPayloadFromDraft(patient, draft));
+      const appointment = appointmentFromBackend(backendAppointment);
+      createdAppointment = appointment;
+      setItems((current) => [appointment, ...current.filter((item) => item.id !== appointment.id)]);
+      setClinicalIntakes((current) => ({ ...current, [appointment.id]: clinical }));
+      setSafetyReviews((current) => ({
+        ...current,
+        [appointment.id]: {
+          status: "queued",
+          submittedAt,
+          hiddenFromDoctor: true,
+        },
+      }));
+      setSelectedId(appointment.id);
+      setFilter("Barchasi");
+      setDraft((current) => ({ ...current, patientId: patient.id, reason: "", ...emptyClinicalInput }));
+      setAppointmentFormMessage("Qabul backendda saqlandi. Xavfsizlik nazoratiga yuborilmoqda.");
+      const record = await createMedicalRecord(buildMedicalRecordPayload(patient, appointment, clinical));
+      setSafetyReviews((current) => ({
+        ...current,
+        [appointment.id]: {
+          status: "submitted",
+          submittedAt,
+          hiddenFromDoctor: true,
+          backendRecordId: record.id,
+        },
+      }));
+      setAppointmentFormMessage("Qabul saqlandi. Xavfli signal bo'lsa, u faqat bosh shifokor va manager paneliga yuboriladi.");
+    } catch (error) {
+      setSafetyReviews((current) => ({
+        ...current,
+        ...(createdAppointment
+          ? {
+              [createdAppointment.id]: {
+                status: "sync_failed" as const,
+                submittedAt,
+                hiddenFromDoctor: true as const,
+                fallbackReason: error instanceof Error ? error.message : "Backend medical-record sync failed.",
+              },
+            }
+          : {}),
+      }));
+      setAppointmentFormMessage(error instanceof Error ? error.message : "Qabul backendga saqlanmadi yoki safety sync bajarilmadi.");
+    } finally {
+      setIsSubmittingAppointment(false);
+    }
   };
 
   return (
@@ -1184,7 +1680,7 @@ function AppointmentsView({ module, query }: { module: CrmModuleKey; query: stri
         <StatCard label="Aktiv" value={String(items.filter((item) => item.status === "Aktiv").length)} icon={Activity} />
         <StatCard label="Bajarildi" value={String(items.filter((item) => item.status === "Bajarildi").length)} icon={CheckCircle2} tone="green" />
         <StatCard label="Bekor qilingan" value={String(items.filter((item) => item.status === "Bekor qilingan").length)} icon={XCircle} tone="red" />
-        <StatCard label="Bugungi yuklama" value="76 %" icon={Clock3} tone="amber" />
+        <StatCard label="Bugungi yuklama" value={`${appointmentLoadPercent} %`} icon={Clock3} tone="amber" />
       </div>
 
       <section className="rounded-md border border-clinical-line bg-white shadow-sm">
@@ -1237,7 +1733,14 @@ function AppointmentsView({ module, query }: { module: CrmModuleKey; query: stri
                 </tr>
               </thead>
               <tbody className="divide-y divide-clinical-line">
-                {filtered.map((item) => (
+                {appointmentsLoading ? (
+                  <tr>
+                    <td colSpan={9} className="px-4 py-8 text-center text-clinical-slate">
+                      Backend qabullar ro'yxati yuklanmoqda.
+                    </td>
+                  </tr>
+                ) : filtered.length ? (
+                  filtered.map((item) => (
                   <tr key={item.id} className={item.id === selected?.id ? "bg-blue-50/70" : "hover:bg-slate-50"}>
                     <td className="px-3 py-3">
                       <button type="button" onClick={() => setSelectedId(item.id)} className="font-semibold text-clinical-ink hover:text-clinical-blue">
@@ -1275,7 +1778,7 @@ function AppointmentsView({ module, query }: { module: CrmModuleKey; query: stri
                         </button>
                         <button
                           type="button"
-                          onClick={() => setStatus(item.id, "Bajarildi")}
+                          onClick={() => void setStatus(item.id, "Bajarildi")}
                           className="flex h-8 w-8 items-center justify-center rounded-md border border-clinical-line text-clinical-slate hover:border-clinical-green hover:text-clinical-green"
                           title="Bajarildi"
                         >
@@ -1283,7 +1786,7 @@ function AppointmentsView({ module, query }: { module: CrmModuleKey; query: stri
                         </button>
                         <button
                           type="button"
-                          onClick={() => setStatus(item.id, "Bekor qilingan")}
+                          onClick={() => void setStatus(item.id, "Bekor qilingan")}
                           className="flex h-8 w-8 items-center justify-center rounded-md border border-clinical-line text-clinical-slate hover:border-clinical-red hover:text-clinical-red"
                           title="Bekor qilish"
                         >
@@ -1292,7 +1795,14 @@ function AppointmentsView({ module, query }: { module: CrmModuleKey; query: stri
                       </div>
                     </td>
                   </tr>
-                ))}
+                  ))
+                ) : (
+                  <tr>
+                    <td colSpan={9} className="px-4 py-8 text-center text-clinical-slate">
+                      Backendda qabul topilmadi. Yangi qabul yaratish uchun Qabul tugmasini bosing.
+                    </td>
+                  </tr>
+                )}
               </tbody>
             </table>
           </div>
@@ -1325,13 +1835,18 @@ function AppointmentsView({ module, query }: { module: CrmModuleKey; query: stri
                   <select
                     value={draft.patientId}
                     onChange={(event) => setDraft((current) => ({ ...current, patientId: Number(event.target.value) }))}
+                    disabled={!availablePatients.length}
                     className="h-10 w-full rounded-md border border-clinical-line bg-white px-3 text-sm focus:border-clinical-blue"
                   >
-                    {registryPatients.map((patient) => (
-                      <option key={patient.id} value={patient.id}>
-                        {patient.fullName}
-                      </option>
-                    ))}
+                    {availablePatients.length ? (
+                      availablePatients.map((patient) => (
+                        <option key={patient.id} value={patient.id}>
+                          {patient.fullName}
+                        </option>
+                      ))
+                    ) : (
+                      <option value={0}>Backendda bemor yo'q</option>
+                    )}
                   </select>
                 </label>
                 <div className="grid grid-cols-2 gap-2">
@@ -1496,10 +2011,11 @@ function AppointmentsView({ module, query }: { module: CrmModuleKey; query: stri
                 </div>
                 <button
                   type="submit"
-                  className="inline-flex h-10 w-full items-center justify-center gap-2 rounded-md bg-clinical-blue text-sm font-semibold text-white"
+                  disabled={isSubmittingAppointment || !availablePatients.length}
+                  className="inline-flex h-10 w-full items-center justify-center gap-2 rounded-md bg-clinical-blue text-sm font-semibold text-white disabled:cursor-not-allowed disabled:bg-slate-300"
                 >
                   <Save className="h-4 w-4" />
-                  Qabulni saqlash
+                  {isSubmittingAppointment ? "Saqlanmoqda..." : availablePatients.length ? "Qabulni saqlash" : "Avval bemor yarating"}
                 </button>
               </div>
             </form>
@@ -1560,7 +2076,7 @@ function AppointmentsView({ module, query }: { module: CrmModuleKey; query: stri
                   <div className="grid grid-cols-2 gap-2">
                     <button
                       type="button"
-                      onClick={() => setStatus(selected.id, "Aktiv")}
+                      onClick={() => void setStatus(selected.id, "Aktiv")}
                       className="inline-flex h-10 items-center justify-center gap-2 rounded-md border border-clinical-line bg-white text-sm font-semibold text-clinical-ink"
                     >
                       <Activity className="h-4 w-4" />
@@ -1568,7 +2084,7 @@ function AppointmentsView({ module, query }: { module: CrmModuleKey; query: stri
                     </button>
                     <button
                       type="button"
-                      onClick={rescheduleSelected}
+                      onClick={() => void rescheduleSelected()}
                       className="inline-flex h-10 items-center justify-center gap-2 rounded-md border border-clinical-line bg-white text-sm font-semibold text-clinical-ink"
                     >
                       <Clock3 className="h-4 w-4" />
@@ -1576,7 +2092,7 @@ function AppointmentsView({ module, query }: { module: CrmModuleKey; query: stri
                     </button>
                     <button
                       type="button"
-                      onClick={() => setStatus(selected.id, "Bajarildi")}
+                      onClick={() => void setStatus(selected.id, "Bajarildi")}
                       className="inline-flex h-10 items-center justify-center gap-2 rounded-md bg-clinical-green text-sm font-semibold text-white"
                     >
                       <CheckCircle2 className="h-4 w-4" />
@@ -1584,7 +2100,7 @@ function AppointmentsView({ module, query }: { module: CrmModuleKey; query: stri
                     </button>
                     <button
                       type="button"
-                      onClick={() => setStatus(selected.id, "Bekor qilingan")}
+                      onClick={() => void setStatus(selected.id, "Bekor qilingan")}
                       className="inline-flex h-10 items-center justify-center gap-2 rounded-md bg-clinical-red text-sm font-semibold text-white"
                     >
                       <XCircle className="h-4 w-4" />
@@ -1599,7 +2115,7 @@ function AppointmentsView({ module, query }: { module: CrmModuleKey; query: stri
               <h3 className="font-semibold text-clinical-ink">Qabullar taqvimi</h3>
               <div className="mt-4 grid grid-cols-2 gap-2">
                 {["08:00", "09:00", "10:00", "11:00", "12:00", "14:00", "15:00", "16:00"].map((time) => {
-                  const slot = items.find((item) => item.time === time && item.date === "2026-06-03" && item.status === "Aktiv");
+                  const slot = items.find((item) => item.time === time && item.date === calendarDate && item.status === "Aktiv");
                   return (
                     <button
                       key={time}

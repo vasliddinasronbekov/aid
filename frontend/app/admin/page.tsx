@@ -11,10 +11,12 @@ import {
   Radio,
   ShieldAlert,
 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 
-import { notificationsUrl } from "@/lib/api";
+import { listAIErrorLogs, listFeedbackSummary, listRCAErrorSummary, notificationsUrl, updateAIErrorLog } from "@/lib/api";
+import type { AIErrorLog, FeedbackSummary, RCAErrorSummary } from "@/lib/api";
 import { RealtimeMessage, useWebSockets } from "@/hooks/useWebSockets";
+import { useAuthGate } from "@/hooks/useAuth";
 
 interface FeedItem {
   id: string;
@@ -26,6 +28,7 @@ interface FeedItem {
 }
 
 type SafetyCaseStatus = "Yangi" | "Ko'rildi" | "RCA ochildi" | "Managerga biriktirildi";
+type SafetyDataSource = "api" | "realtime";
 
 interface SafetyCase {
   id: string;
@@ -40,81 +43,12 @@ interface SafetyCase {
   createdAt: string;
 }
 
-interface FeedbackRow {
+interface FeedbackRoomSummary {
   department: string;
   room: string;
-  rating: number;
+  average: number;
+  count: number;
 }
-
-const initialFeed: FeedItem[] = [
-  {
-    id: "seed-1",
-    type: "ai",
-    title: "Prescription mismatch",
-    detail: "Preeclampsia pathway missing magnesium-sulfate mention.",
-    severity: "critical",
-    time: "09:42",
-  },
-  {
-    id: "seed-2",
-    type: "feedback",
-    title: "Room feedback",
-    detail: "Perinatal 204 received a 3-star anonymous rating.",
-    severity: "warning",
-    time: "09:38",
-  },
-  {
-    id: "seed-3",
-    type: "call",
-    title: "Active call",
-    detail: "High-risk discharge routed to Andijan central regional doctors.",
-    severity: "critical",
-    time: "09:21",
-  },
-];
-
-const feedbackRows: FeedbackRow[] = [
-  { department: "Perinatal", room: "204", rating: 4 },
-  { department: "Perinatal", room: "204", rating: 3 },
-  { department: "Therapy", room: "118", rating: 5 },
-  { department: "Imaging", room: "031", rating: 4 },
-  { department: "Cardiology", room: "404", rating: 2 },
-  { department: "Cardiology", room: "404", rating: 3 },
-];
-
-const initialSafetyCases: SafetyCase[] = [
-  {
-    id: "case-1",
-    patient: "TOLANBOYEVA XURSHIDAXON OYBEKOVNA",
-    doctor: "Perinatal navbatchi",
-    signal: "Preeclampsia pathway risk",
-    evidence: "Red-zone pregnancy context and missing magnesium-sulfate mention.",
-    protocol: "MOH-P6-OBSTETRIC-SAFETY",
-    severity: "critical",
-    status: "Yangi",
-    owner: "Head physician",
-    createdAt: "09:42",
-  },
-  {
-    id: "case-2",
-    patient: "Буваев Давлат Мухсинович",
-    doctor: "Azimov Xoji Akbar",
-    signal: "High-risk discharge continuity gap",
-    evidence: "Severe chronic-risk markers at discharge; Active Call owner not visible.",
-    protocol: "MOH-P12-DIGITAL-TWIN",
-    severity: "warning",
-    status: "Managerga biriktirildi",
-    owner: "Care manager",
-    createdAt: "09:21",
-  },
-];
-
-const rcaCategories = [
-  { label: "Protocol visibility", count: 12, color: "bg-clinical-blue" },
-  { label: "Order-set availability", count: 8, color: "bg-clinical-cyan" },
-  { label: "Handoff design", count: 6, color: "bg-clinical-amber" },
-  { label: "Template omission", count: 5, color: "bg-clinical-red" },
-];
 
 function severityClasses(severity: FeedItem["severity"]) {
   if (severity === "critical") {
@@ -130,28 +64,73 @@ function normalizeSafetySeverity(severity?: string): SafetyCase["severity"] {
   return severity === "CRITICAL" ? "critical" : "warning";
 }
 
-function getRoomAverages(rows: FeedbackRow[]) {
-  const grouped = rows.reduce<Record<string, { department: string; room: string; total: number; count: number }>>(
-    (acc, row) => {
-      const key = `${row.department}-${row.room}`;
-      acc[key] ??= { department: row.department, room: row.room, total: 0, count: 0 };
-      acc[key].total += row.rating;
-      acc[key].count += 1;
-      return acc;
-    },
-    {},
-  );
+function safetyErrorLabel(errorType: AIErrorLog["error_type"]) {
+  const labels: Record<AIErrorLog["error_type"], string> = {
+    ENTRY_OMISSION: "Clinical entry omission",
+    PRESCRIPTION_MISMATCH: "Prescription mismatch",
+    ETHICAL_DEVIATION: "Ethical deviation",
+    IMAGING_SAFETY: "Imaging safety",
+    DIGITAL_TWIN_RISK: "Digital Twin risk",
+  };
+  return labels[errorType];
+}
 
-  return Object.values(grouped).map((item) => ({
-    ...item,
-    average: item.total / item.count,
-  }));
+function formatSafetyTime(value: string) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return value;
+  }
+  return new Intl.DateTimeFormat("en", {
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).format(date);
+}
+
+function safetyCaseFromAIErrorLog(log: AIErrorLog): SafetyCase {
+  return {
+    id: `log-${log.id}`,
+    patient: log.patient_name,
+    doctor: log.doctor_id || "Unknown doctor",
+    signal: safetyErrorLabel(log.error_type),
+    evidence: log.rca_description,
+    protocol: log.protocol_reference || "AID-SAFETY-REVIEW",
+    severity: normalizeSafetySeverity(log.severity),
+    status: log.reviewed_by_admin ? "Ko'rildi" : "Yangi",
+    owner: "Head physician",
+    createdAt: formatSafetyTime(log.created_at),
+  };
+}
+
+function feedbackSummaryToRoom(summary: FeedbackSummary): FeedbackRoomSummary {
+  return {
+    department: summary.department || summary.target_type,
+    room: summary.room_qr_id || (summary.target_staff_profile ? `Doctor ${summary.target_staff_profile}` : "General"),
+    average: summary.avg_rating ?? 0,
+    count: summary.total,
+  };
+}
+
+function rcaCategoryLabel(errorType: RCAErrorSummary["error_type"]) {
+  return safetyErrorLabel(errorType);
+}
+
+function rcaCategoryColor(index: number) {
+  return ["bg-clinical-blue", "bg-clinical-cyan", "bg-clinical-amber", "bg-clinical-red"][index % 4];
 }
 
 export default function AdminCommandCenterPage() {
-  const [feed, setFeed] = useState(initialFeed);
-  const [safetyCases, setSafetyCases] = useState(initialSafetyCases);
-  const [selectedCaseId, setSelectedCaseId] = useState(initialSafetyCases[0]?.id ?? "");
+  const { user, loading: authLoading, signOut } = useAuthGate({
+    allowedRoles: ["SYSTEM_ADMIN", "HOSPITAL_ADMIN", "HEAD_PHYSICIAN", "COMPLIANCE_OFFICER", "AUDITOR"],
+  });
+  const [feed, setFeed] = useState<FeedItem[]>([]);
+  const [safetyCases, setSafetyCases] = useState<SafetyCase[]>([]);
+  const [selectedCaseId, setSelectedCaseId] = useState("");
+  const [roomAverages, setRoomAverages] = useState<FeedbackRoomSummary[]>([]);
+  const [rcaCategories, setRcaCategories] = useState<{ label: string; count: number; color: string }[]>([]);
+  const [safetyDataSource, setSafetyDataSource] = useState<SafetyDataSource>("api");
+  const [safetyLoading, setSafetyLoading] = useState(true);
+  const [safetyLoadError, setSafetyLoadError] = useState("");
   const { status: socketStatus, lastMessage } = useWebSockets<RealtimeMessage>({
     url: notificationsUrl("head_physicians"),
   });
@@ -168,7 +147,62 @@ export default function AdminCommandCenterPage() {
           : safetyCase,
       ),
     );
+    if (caseId.startsWith("log-") && status === "Ko'rildi") {
+      const logId = Number(caseId.replace("log-", ""));
+      if (Number.isFinite(logId)) {
+        updateAIErrorLog(logId, { reviewed_by_admin: true }).catch((error) => {
+          setSafetyLoadError(error instanceof Error ? error.message : "AI error log update failed.");
+        });
+      }
+    }
   };
+
+  useEffect(() => {
+    let active = true;
+
+    setSafetyLoading(true);
+    Promise.all([listAIErrorLogs(), listFeedbackSummary(), listRCAErrorSummary()])
+      .then(([errorLogResponse, feedbackResponse, rcaResponse]) => {
+        if (!active) {
+          return;
+        }
+        const cases = errorLogResponse.results
+          .filter((log) => log.severity === "HIGH" || log.severity === "CRITICAL")
+          .map(safetyCaseFromAIErrorLog);
+        setSafetyCases(cases);
+        setSelectedCaseId((current) => (cases.some((item) => item.id === current) ? current : cases[0]?.id ?? ""));
+        setRoomAverages(feedbackResponse.map(feedbackSummaryToRoom));
+        setRcaCategories(
+          rcaResponse.map((item, index) => ({
+            label: rcaCategoryLabel(item.error_type),
+            count: item.total,
+            color: rcaCategoryColor(index),
+          })),
+        );
+        setSafetyDataSource("api");
+        setSafetyLoadError("");
+      })
+      .catch((error) => {
+        if (!active) {
+          return;
+        }
+        setSafetyCases([]);
+        setSelectedCaseId("");
+        setRoomAverages([]);
+        setRcaCategories([]);
+        setSafetyDataSource("api");
+        setSafetyLoadError(error instanceof Error ? error.message : "AI error log API is not available.");
+      })
+      .finally(() => {
+        if (active) {
+          setSafetyLoading(false);
+        }
+      });
+
+    return () => {
+      active = false;
+    };
+  }, []);
 
   useEffect(() => {
     if (!lastMessage) {
@@ -185,10 +219,11 @@ export default function AdminCommandCenterPage() {
       const payload = lastMessage.payload as {
         patient_name?: string;
         doctor_id?: string;
-        errors?: { rca_description: string; severity: string; protocol_reference?: string }[];
+        errors?: { id?: number; rca_description: string; severity: string; protocol_reference?: string }[];
       };
       const firstError = payload.errors?.[0];
-      const caseId = `case-${Date.now()}`;
+      const caseId = typeof firstError?.id === "number" ? `log-${firstError.id}` : `case-${Date.now()}`;
+      setSafetyDataSource("realtime");
       setFeed((current) => [
         {
           id: `ai-${Date.now()}`,
@@ -249,10 +284,20 @@ export default function AdminCommandCenterPage() {
     }
   }, [lastMessage]);
 
-  const roomAverages = useMemo(() => getRoomAverages(feedbackRows), []);
   const selectedCase = safetyCases.find((item) => item.id === selectedCaseId) ?? safetyCases[0];
   const openSafetyCases = safetyCases.filter((item) => item.status !== "Ko'rildi").length;
   const criticalSafetyCases = safetyCases.filter((item) => item.severity === "critical").length;
+  const safetySourceLabel = safetyDataSource === "api" ? "Backend AI error logs" : "Realtime escalation stream";
+
+  if (authLoading) {
+    return (
+      <main className="flex min-h-screen items-center justify-center bg-clinical-wash px-4 text-clinical-ink">
+        <div className="rounded-md border border-clinical-line bg-white px-5 py-4 text-sm text-clinical-slate shadow-sm">
+          Command center loading
+        </div>
+      </main>
+    );
+  }
 
   return (
     <main className="min-h-screen bg-clinical-wash">
@@ -271,6 +316,13 @@ export default function AdminCommandCenterPage() {
             <Radio className="h-4 w-4 text-clinical-cyan" />
             {socketStatus}
           </span>
+          <button
+            type="button"
+            onClick={() => void signOut()}
+            className="inline-flex w-fit items-center gap-2 rounded-md border border-clinical-line bg-white px-3 py-2 text-sm font-semibold text-clinical-slate"
+          >
+            {user?.display_name || user?.username || "Account"}
+          </button>
         </div>
       </header>
 
@@ -299,6 +351,15 @@ export default function AdminCommandCenterPage() {
               <strong className="mt-3 block text-3xl text-clinical-ink">{feed.length}</strong>
             </div>
           </div>
+          <div className="flex flex-col gap-2 rounded-md border border-clinical-line bg-white px-4 py-3 text-sm text-clinical-slate shadow-sm sm:flex-row sm:items-center sm:justify-between">
+            <span className="inline-flex items-center gap-2">
+              <Radio className="h-4 w-4 text-clinical-cyan" />
+              {safetyLoading ? "Safety inbox sinxronlanmoqda" : safetySourceLabel}
+            </span>
+            {safetyLoadError ? (
+              <span className="text-xs text-clinical-slate">Backend sync cheklangan, lokal holat saqlab turildi.</span>
+            ) : null}
+          </div>
 
           <section className="rounded-md border border-clinical-line bg-white shadow-sm">
             <div className="flex items-center gap-2 border-b border-clinical-line px-4 py-3">
@@ -306,7 +367,7 @@ export default function AdminCommandCenterPage() {
               <h2 className="text-sm font-semibold text-clinical-ink">Safety escalation inbox</h2>
             </div>
             <div className="divide-y divide-clinical-line">
-              {safetyCases.map((item) => (
+              {safetyCases.length ? safetyCases.map((item) => (
                 <article key={item.id} className="grid gap-3 px-4 py-3 lg:grid-cols-[1fr_130px_180px] lg:items-center">
                   <button type="button" onClick={() => setSelectedCaseId(item.id)} className="min-w-0 text-left">
                     <div className="flex flex-wrap items-center gap-2">
@@ -348,7 +409,11 @@ export default function AdminCommandCenterPage() {
                     </button>
                   </div>
                 </article>
-              ))}
+              )) : (
+                <div className="px-4 py-8 text-sm text-clinical-slate">
+                  Ochiq high/critical AI safety case yo'q.
+                </div>
+              )}
             </div>
           </section>
 

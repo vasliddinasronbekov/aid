@@ -1,4 +1,6 @@
-from django.contrib.auth import get_user_model
+from django.contrib.auth import authenticate, get_user_model
+from django.contrib.auth.password_validation import validate_password
+from django.db import transaction
 from rest_framework import serializers
 
 from .models import (
@@ -32,6 +34,131 @@ from .models import (
 
 
 User = get_user_model()
+
+
+class AuthStaffProfileSerializer(serializers.ModelSerializer):
+    organization_name = serializers.CharField(source="organization.name", read_only=True)
+    primary_hospital_name = serializers.CharField(source="primary_hospital.name", read_only=True)
+
+    class Meta:
+        model = StaffProfile
+        fields = [
+            "id",
+            "public_id",
+            "organization",
+            "organization_name",
+            "primary_hospital",
+            "primary_hospital_name",
+            "role",
+            "employment_status",
+            "license_number",
+            "phone_number",
+            "metadata",
+        ]
+        read_only_fields = fields
+
+
+class AuthUserSerializer(serializers.ModelSerializer):
+    display_name = serializers.SerializerMethodField()
+    staff_profile = AuthStaffProfileSerializer(read_only=True)
+
+    class Meta:
+        model = User
+        fields = [
+            "id",
+            "username",
+            "email",
+            "first_name",
+            "last_name",
+            "display_name",
+            "is_superuser",
+            "staff_profile",
+        ]
+        read_only_fields = fields
+
+    def get_display_name(self, obj) -> str:
+        return obj.get_full_name() or obj.username
+
+
+class LoginSerializer(serializers.Serializer):
+    username = serializers.CharField(max_length=150)
+    password = serializers.CharField(trim_whitespace=False, write_only=True)
+
+    def validate(self, attrs):
+        request = self.context.get("request")
+        user = authenticate(request=request, username=attrs["username"], password=attrs["password"])
+        if not user:
+            raise serializers.ValidationError({"username": "Invalid username or password."})
+        if not user.is_active:
+            raise serializers.ValidationError({"username": "This account is inactive."})
+        attrs["user"] = user
+        return attrs
+
+
+class RegisterSerializer(serializers.Serializer):
+    role = serializers.ChoiceField(
+        choices=[
+            StaffProfile.Role.HOSPITAL_ADMIN,
+            StaffProfile.Role.HEAD_PHYSICIAN,
+            StaffProfile.Role.PHYSICIAN,
+            StaffProfile.Role.NURSE,
+        ],
+        default=StaffProfile.Role.HEAD_PHYSICIAN,
+    )
+    username = serializers.CharField(max_length=150)
+    email = serializers.EmailField(required=False, allow_blank=True)
+    password = serializers.CharField(trim_whitespace=False, write_only=True)
+    first_name = serializers.CharField(max_length=120)
+    last_name = serializers.CharField(max_length=120)
+    organization_name = serializers.CharField(max_length=180)
+    hospital_name = serializers.CharField(max_length=180)
+    region_code = serializers.CharField(max_length=64, default="andijan-central")
+    phone_number = serializers.CharField(max_length=32, required=False, allow_blank=True)
+    license_number = serializers.CharField(max_length=120, required=False, allow_blank=True)
+
+    def validate_username(self, value: str) -> str:
+        username = value.strip()
+        if not username:
+            raise serializers.ValidationError("Username is required.")
+        if User.objects.filter(username__iexact=username).exists():
+            raise serializers.ValidationError("This username is already registered.")
+        return username
+
+    def validate_password(self, value: str) -> str:
+        validate_password(value)
+        return value
+
+    def create(self, validated_data):
+        with transaction.atomic():
+            organization = Organization.objects.create(
+                name=validated_data["organization_name"].strip(),
+                legal_name=validated_data["organization_name"].strip(),
+                data_region="uz",
+                locale="uz-Latn",
+            )
+            hospital = Hospital.objects.create(
+                organization=organization,
+                code=validated_data["username"][:64],
+                name=validated_data["hospital_name"].strip(),
+                region_code=validated_data["region_code"].strip() or "andijan-central",
+            )
+            user = User.objects.create_user(
+                username=validated_data["username"],
+                email=validated_data.get("email", "").strip(),
+                password=validated_data["password"],
+                first_name=validated_data["first_name"].strip(),
+                last_name=validated_data["last_name"].strip(),
+            )
+            StaffProfile.objects.create(
+                user=user,
+                organization=organization,
+                primary_hospital=hospital,
+                role=validated_data["role"],
+                phone_number=validated_data.get("phone_number", "").strip(),
+                license_number=validated_data.get("license_number", "").strip(),
+                metadata={"registration_source": "self_service"},
+            )
+        return user
 
 
 class OrganizationSerializer(serializers.ModelSerializer):
