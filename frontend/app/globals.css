@@ -1,0 +1,79 @@
+@import "tailwindcss";
+
+@theme {
+  --color-clinical-ink: #172033;
+  --color-clinical-slate: #526173;
+  --color-clinical-blue: #2b67d8;
+  --color-clinical-cyan: #0f95a8;
+  --color-clinical-red: #c83f4b;
+  --color-clinical-amber: #a96d1a;
+  --color-clinical-green: #23815e;
+  --color-clinical-line: #dde6ef;
+  --color-clinical-wash: #f5f8fb;
+  --shadow-clinical: 0 18px 48px rgba(21, 32, 51, 0.1);
+}
+
+:root {
+  color-scheme: light;
+  background: #f5f8fb;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  min-height: 100%;
+}
+
+body {
+  min-height: 100%;
+  margin: 0;
+  background: #f5f8fb;
+  color: #172033;
+  font-family: Arial, Helvetica, sans-serif;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+}
+
+button:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible {
+  outline: 2px solid #2f6fdb;
+  outline-offset: 2px;
+}
+
+::selection {
+  background: #cbe4ff;
+}
+
+::-webkit-scrollbar {
+  height: 10px;
+  width: 10px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #c9d6e3;
+  border: 2px solid transparent;
+  border-radius: 999px;
+  background-clip: content-box;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #9fb1c4;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
