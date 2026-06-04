@@ -28,7 +28,7 @@ NEXT_PUBLIC_WS_BASE_URL=wss://api.your-domain.com
 
 Use `DJANGO_SESSION_COOKIE_SAMESITE=None`, `DJANGO_CSRF_COOKIE_SAMESITE=None`, and `DJANGO_COOKIE_SECURE=true` when the frontend and backend are on different HTTPS domains.
 
-Also update `server_name` in `deploy/nginx/aid-backend.conf` from `api.example.com` to your API domain.
+Also update `server_name` in `deploy/nginx/aid-backend.conf` from `api.aid-ai.uz` to your API domain.
 
 ## 2. Start The Backend
 
