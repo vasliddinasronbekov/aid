@@ -126,7 +126,7 @@ if DEBUG:
     # Allow typical dev frontend origins and local API origins
     CORS_ALLOWED_ORIGINS = env_list(
         "CORS_ALLOWED_ORIGINS",
-        "http://localhost:3000,http://127.0.0.1:3000,http://0.0.0.0:3000,http://localhost:8000,http://127.0.0.1:8000",
+        "http://localhost:3000,http://127.0.0.1:3000,http://0.0.0.0:3000,http://api.aid-ai.uz,http://127.0.0.1:8000",
     )
 
     # For convenience while developing enable all origins (still respects
@@ -135,7 +135,7 @@ if DEBUG:
 
     CSRF_TRUSTED_ORIGINS = env_list(
         "CSRF_TRUSTED_ORIGINS",
-        "http://localhost:3000,http://127.0.0.1:3000,http://0.0.0.0:3000,http://localhost:8000,http://127.0.0.1:8000",
+        "http://localhost:3000,http://127.0.0.1:3000,http://0.0.0.0:3000,http://api.aid-ai.uz,http://127.0.0.1:8000",
     )
 else:
     CORS_ALLOWED_ORIGINS = env_list("CORS_ALLOWED_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000")

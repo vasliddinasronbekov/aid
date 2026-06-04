@@ -50,8 +50,8 @@ Open `http://localhost:3000/doctor`, `http://localhost:3000/admin`, or `http://l
 
 ## Realtime Endpoints
 
-- Regional doctors: `ws://localhost:8000/ws/notifications/regional_doctor/<region_code>/`
-- Head physicians: `ws://localhost:8000/ws/notifications/head_physicians/`
+- Regional doctors: `ws://api.aid-ai.uz/ws/notifications/regional_doctor/<region_code>/`
+- Head physicians: `ws://api.aid-ai.uz/ws/notifications/head_physicians/`
 
 ## Foundation API Endpoints
 

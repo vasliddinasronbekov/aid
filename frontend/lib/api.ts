@@ -1,8 +1,8 @@
 export const API_BASE_URL =
-  process.env.NEXT_PUBLIC_API_BASE_URL?.replace(/\/$/, "") ?? "http://localhost:8000/api";
+  process.env.NEXT_PUBLIC_API_BASE_URL?.replace(/\/$/, "") ?? "http://api.aid-ai.uz/api";
 
 export const WS_BASE_URL =
-  process.env.NEXT_PUBLIC_WS_BASE_URL?.replace(/\/$/, "") ?? "ws://localhost:8000";
+  process.env.NEXT_PUBLIC_WS_BASE_URL?.replace(/\/$/, "") ?? "ws://api.aid-ai.uz";
 
 export type TriageStatus = "RED" | "YELLOW" | "GREEN";
 export type StaffRole =
