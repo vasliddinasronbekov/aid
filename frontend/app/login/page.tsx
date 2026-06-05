@@ -4,7 +4,7 @@ import Image from "next/image";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { FormEvent, useEffect, useState } from "react";
-import { LockKeyhole, LogIn, ShieldCheck, UserRound } from "lucide-react";
+import { LockKeyhole, LogIn, MessageSquareText, ShieldCheck, UserRound } from "lucide-react";
 
 import { loginUser } from "@/lib/api";
 
@@ -110,6 +110,14 @@ export default function LoginPage() {
             {submitting ? "Signing in..." : "Sign in"}
           </button>
 
+          <a
+            href="https://www.aid-ai.uz/feedback/doctors"
+            className="mt-3 inline-flex h-11 w-full items-center justify-center gap-2 rounded-md border border-clinical-line bg-white text-sm font-semibold text-clinical-blue transition hover:border-clinical-blue hover:bg-blue-50"
+          >
+            <MessageSquareText className="h-4 w-4" />
+            Go to feedback page
+          </a>
+
           <p className="mt-5 text-center text-sm text-clinical-slate">
             New clinic account?{" "}
             <Link href="/register" className="font-semibold text-clinical-blue">
@@ -121,4 +129,3 @@ export default function LoginPage() {
     </main>
   );
 }
-
