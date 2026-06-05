@@ -1233,7 +1233,7 @@ export function updateFeedback(feedbackId: number, payload: Partial<Pick<Anonymo
 
 export function listPublicFeedbackDoctors(query = "") {
   const suffix = query ? `?${query}` : "";
-  return apiFetch<PublicFeedbackDoctor[]>(`/feedback/public-doctors/${suffix}`);
+  return apiFetch<PublicFeedbackDoctor[]>(`/feedback-doctors/${suffix}`);
 }
 
 export function requestFeedbackPhoneVerification(payload: PhoneVerificationRequestPayload) {

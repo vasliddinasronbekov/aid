@@ -26,6 +26,7 @@ from .views import (
     PatientVitalViewSet,
     PatronageVisitViewSet,
     PerinatalRegistryEntryViewSet,
+    PublicFeedbackDoctorListView,
     ReferralViewSet,
     RegisterView,
     RoomViewSet,
@@ -64,5 +65,6 @@ urlpatterns = [
     path("auth/login/", LoginView.as_view(), name="auth-login"),
     path("auth/logout/", LogoutView.as_view(), name="auth-logout"),
     path("auth/register/", RegisterView.as_view(), name="auth-register"),
+    path("feedback-doctors/", PublicFeedbackDoctorListView.as_view(), name="public-feedback-doctors"),
     *router.urls,
 ]

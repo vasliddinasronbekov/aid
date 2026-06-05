@@ -2489,36 +2489,7 @@ class AnonymousFeedbackViewSet(TenantScopedQuerysetMixin, AuditReadMixin, viewse
 
     @action(detail=False, methods=["get"], url_path="public-doctors")
     def public_doctors(self, request):
-        queryset = (
-            StaffProfile.objects.select_related("user", "organization", "primary_hospital")
-            .prefetch_related("departments")
-            .filter(
-                employment_status=StaffProfile.EmploymentStatus.ACTIVE,
-                role__in=[StaffProfile.Role.PHYSICIAN, StaffProfile.Role.HEAD_PHYSICIAN],
-            )
-        )
-        search = request.query_params.get("search", "").strip()
-        if search:
-            queryset = queryset.filter(
-                models.Q(user__first_name__icontains=search)
-                | models.Q(user__last_name__icontains=search)
-                | models.Q(user__username__icontains=search)
-                | models.Q(license_number__icontains=search)
-                | models.Q(primary_hospital__name__icontains=search)
-            )
-        data = [
-            {
-                "id": profile.id,
-                "display_name": profile.user.get_full_name() or profile.user.username,
-                "role": profile.role,
-                "organization_name": profile.organization.name,
-                "primary_hospital_name": profile.primary_hospital.name if profile.primary_hospital else "",
-                "department_names": [department.name for department in profile.departments.all()],
-                "license_number": profile.license_number,
-            }
-            for profile in queryset[:100]
-        ]
-        return Response(data)
+        return Response(public_feedback_doctors_payload(request))
 
     @action(detail=False, methods=["post"], url_path="request-phone-verification")
     def request_phone_verification(self, request):
@@ -2723,6 +2694,46 @@ class AnonymousFeedbackViewSet(TenantScopedQuerysetMixin, AuditReadMixin, viewse
             .aggregate(avg_rating=Avg("rating"), total=Count("id"), last_feedback_at=Max("created_at"))
         )
         return Response({"room_qr_id": room_qr_id, **data})
+
+
+def public_feedback_doctors_payload(request):
+    queryset = (
+        StaffProfile.objects.select_related("user", "organization", "primary_hospital")
+        .prefetch_related("departments")
+        .filter(
+            employment_status=StaffProfile.EmploymentStatus.ACTIVE,
+            role__in=[StaffProfile.Role.PHYSICIAN, StaffProfile.Role.HEAD_PHYSICIAN],
+        )
+    )
+    search = request.query_params.get("search", "").strip()
+    if search:
+        queryset = queryset.filter(
+            models.Q(user__first_name__icontains=search)
+            | models.Q(user__last_name__icontains=search)
+            | models.Q(user__username__icontains=search)
+            | models.Q(license_number__icontains=search)
+            | models.Q(primary_hospital__name__icontains=search)
+        )
+    return [
+        {
+            "id": profile.id,
+            "display_name": profile.user.get_full_name() or profile.user.username,
+            "role": profile.role,
+            "organization_name": profile.organization.name,
+            "primary_hospital_name": profile.primary_hospital.name if profile.primary_hospital else "",
+            "department_names": [department.name for department in profile.departments.all()],
+            "license_number": profile.license_number,
+        }
+        for profile in queryset[:100]
+    ]
+
+
+class PublicFeedbackDoctorListView(APIView):
+    permission_classes = [permissions.AllowAny]
+    authentication_classes = []
+
+    def get(self, request):
+        return Response(public_feedback_doctors_payload(request))
 
 
 class AuditEventViewSet(TenantScopedQuerysetMixin, viewsets.ReadOnlyModelViewSet):
