@@ -42,6 +42,27 @@ export interface AuthUser {
   staff_profile?: AuthStaffProfile;
 }
 
+export interface StaffProfile {
+  id: number;
+  public_id: string;
+  user: number;
+  user_username: string;
+  user_display_name: string;
+  organization: number | null;
+  organization_name: string;
+  primary_hospital: number | null;
+  primary_hospital_name: string;
+  departments: number[];
+  role: StaffRole;
+  employment_status: "ACTIVE" | "SUSPENDED" | "TERMINATED";
+  license_number: string;
+  phone_number: string;
+  last_privacy_training_at: string | null;
+  metadata: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface LoginPayload {
   username: string;
   password: string;
@@ -864,6 +885,11 @@ export function listDepartments(query = "") {
 export function listRooms(query = "") {
   const suffix = query ? `?${query}` : "";
   return apiFetch<PaginatedResponse<Room>>(`/rooms/${suffix}`);
+}
+
+export function listStaffProfiles(query = "") {
+  const suffix = query ? `?${query}` : "";
+  return apiFetch<PaginatedResponse<StaffProfile>>(`/staff-profiles/${suffix}`);
 }
 
 export function listAppointments(query = "") {
