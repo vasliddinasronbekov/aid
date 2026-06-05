@@ -1601,6 +1601,7 @@ class AnonymousFeedback(models.Model):
     room_qr_id = models.CharField(max_length=120, blank=True, db_index=True)
     anonymous_session_id = models.CharField(max_length=128, unique=True, default=uuid.uuid4)
     phone_hash = models.CharField(max_length=128, blank=True, db_index=True)
+    contact_phone_number = models.CharField(max_length=40, blank=True)
     phone_verified = models.BooleanField(default=False, db_index=True)
     category = models.CharField(max_length=32, choices=Category.choices, default=Category.GENERAL, db_index=True)
     severity = models.CharField(max_length=20, choices=Severity.choices, default=Severity.LOW, db_index=True)

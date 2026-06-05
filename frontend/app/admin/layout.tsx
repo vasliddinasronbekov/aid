@@ -3,13 +3,14 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import type { ReactNode } from "react";
-import { BarChart3, Bot, ClipboardList, LogOut, ShieldAlert } from "lucide-react";
+import { BarChart3, Bot, ClipboardList, LogOut, MessageSquareText, ShieldAlert } from "lucide-react";
 
 import { useAuthGate } from "@/hooks/useAuth";
 
 const adminNav = [
   { href: "/admin/records", label: "Records", icon: ClipboardList },
   { href: "/admin/ai-safety", label: "AI safety", icon: ShieldAlert },
+  { href: "/admin/feedback", label: "Feedback", icon: MessageSquareText },
   { href: "/admin/ranks", label: "Doctor ranks", icon: BarChart3 },
 ];
 

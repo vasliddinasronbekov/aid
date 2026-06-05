@@ -2467,9 +2467,58 @@ class AnonymousFeedbackViewSet(TenantScopedQuerysetMixin, AuditReadMixin, viewse
     audit_phi_accessed = False
 
     def get_permissions(self):
-        if self.action in {"create", "public_room_score", "request_phone_verification", "verify_phone"}:
+        if self.action in {"create", "public_doctors", "public_room_score", "request_phone_verification", "verify_phone"}:
             return [permissions.AllowAny()]
         return [IsGovernanceReader()]
+
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        target_type = self.request.query_params.get("target_type")
+        status_filter = self.request.query_params.get("status")
+        target_staff_profile = self.request.query_params.get("target_staff_profile")
+        severity = self.request.query_params.get("severity")
+        if target_type:
+            queryset = queryset.filter(target_type=target_type.upper())
+        if status_filter:
+            queryset = queryset.filter(status=status_filter.upper())
+        if target_staff_profile:
+            queryset = queryset.filter(target_staff_profile_id=target_staff_profile)
+        if severity:
+            queryset = queryset.filter(severity=severity.upper())
+        return queryset
+
+    @action(detail=False, methods=["get"], url_path="public-doctors")
+    def public_doctors(self, request):
+        queryset = (
+            StaffProfile.objects.select_related("user", "organization", "primary_hospital")
+            .prefetch_related("departments")
+            .filter(
+                employment_status=StaffProfile.EmploymentStatus.ACTIVE,
+                role__in=[StaffProfile.Role.PHYSICIAN, StaffProfile.Role.HEAD_PHYSICIAN],
+            )
+        )
+        search = request.query_params.get("search", "").strip()
+        if search:
+            queryset = queryset.filter(
+                models.Q(user__first_name__icontains=search)
+                | models.Q(user__last_name__icontains=search)
+                | models.Q(user__username__icontains=search)
+                | models.Q(license_number__icontains=search)
+                | models.Q(primary_hospital__name__icontains=search)
+            )
+        data = [
+            {
+                "id": profile.id,
+                "display_name": profile.user.get_full_name() or profile.user.username,
+                "role": profile.role,
+                "organization_name": profile.organization.name,
+                "primary_hospital_name": profile.primary_hospital.name if profile.primary_hospital else "",
+                "department_names": [department.name for department in profile.departments.all()],
+                "license_number": profile.license_number,
+            }
+            for profile in queryset[:100]
+        ]
+        return Response(data)
 
     @action(detail=False, methods=["post"], url_path="request-phone-verification")
     def request_phone_verification(self, request):
@@ -2546,36 +2595,50 @@ class AnonymousFeedbackViewSet(TenantScopedQuerysetMixin, AuditReadMixin, viewse
     def perform_create(self, serializer):
         challenge_id = serializer.validated_data.pop("phone_verification_challenge", None)
         verification_token = serializer.validated_data.pop("phone_verification_token", "")
-        if not challenge_id or not verification_token:
-            raise ValidationError("Phone verification is required.")
+        direct_phone_number = serializer.validated_data.pop("phone_number", "")
 
         with transaction.atomic():
-            challenge = (
-                PhoneVerificationChallenge.objects.select_for_update()
-                .select_related("target_staff_profile", "target_staff_profile__organization", "target_staff_profile__primary_hospital")
-                .filter(challenge_id=challenge_id)
-                .first()
-            )
-            if not challenge:
-                raise ValidationError({"phone_verification_challenge": "Verification challenge was not found."})
-            if challenge.is_consumed:
-                raise ValidationError({"phone_verification_challenge": "Verification challenge has already been used."})
-            if challenge.is_expired:
-                raise ValidationError({"phone_verification_challenge": "Verification challenge has expired."})
-            if not challenge.is_verified or not challenge.token_matches(verification_token):
-                raise ValidationError({"phone_verification_token": "Verification token is invalid."})
+            challenge = None
+            phone_verified = False
+            contact_phone_number = direct_phone_number
+            phone_hash = PhoneVerificationChallenge.phone_hash_for(direct_phone_number) if direct_phone_number else ""
 
-            target_type = serializer.validated_data.get("target_type") or challenge.target_type
-            room_qr_id = serializer.validated_data.get("room_qr_id") or challenge.room_qr_id
-            target_staff_profile = serializer.validated_data.get("target_staff_profile") or challenge.target_staff_profile
-            if target_type != challenge.target_type:
-                raise ValidationError({"target_type": "Feedback target does not match verification challenge."})
-            if challenge.room_qr_id and room_qr_id != challenge.room_qr_id:
-                raise ValidationError({"room_qr_id": "room_qr_id does not match verification challenge."})
-            if challenge.target_staff_profile_id and (
-                not target_staff_profile or target_staff_profile.id != challenge.target_staff_profile_id
-            ):
-                raise ValidationError({"target_staff_profile": "Doctor target does not match verification challenge."})
+            if challenge_id or verification_token:
+                if not challenge_id or not verification_token:
+                    raise ValidationError("Phone verification challenge and token are both required.")
+                challenge = (
+                    PhoneVerificationChallenge.objects.select_for_update()
+                    .select_related("target_staff_profile", "target_staff_profile__organization", "target_staff_profile__primary_hospital")
+                    .filter(challenge_id=challenge_id)
+                    .first()
+                )
+                if not challenge:
+                    raise ValidationError({"phone_verification_challenge": "Verification challenge was not found."})
+                if challenge.is_consumed:
+                    raise ValidationError({"phone_verification_challenge": "Verification challenge has already been used."})
+                if challenge.is_expired:
+                    raise ValidationError({"phone_verification_challenge": "Verification challenge has expired."})
+                if not challenge.is_verified or not challenge.token_matches(verification_token):
+                    raise ValidationError({"phone_verification_token": "Verification token is invalid."})
+                phone_verified = True
+                phone_hash = challenge.phone_hash
+
+            target_type = serializer.validated_data.get("target_type") or (challenge.target_type if challenge else "")
+            room_qr_id = serializer.validated_data.get("room_qr_id") or (challenge.room_qr_id if challenge else "")
+            target_staff_profile = serializer.validated_data.get("target_staff_profile") or (
+                challenge.target_staff_profile if challenge else None
+            )
+            if challenge:
+                if target_type != challenge.target_type:
+                    raise ValidationError({"target_type": "Feedback target does not match verification challenge."})
+                if challenge.room_qr_id and room_qr_id != challenge.room_qr_id:
+                    raise ValidationError({"room_qr_id": "room_qr_id does not match verification challenge."})
+                if challenge.target_staff_profile_id and (
+                    not target_staff_profile or target_staff_profile.id != challenge.target_staff_profile_id
+                ):
+                    raise ValidationError({"target_staff_profile": "Doctor target does not match verification challenge."})
+            elif not direct_phone_number:
+                raise ValidationError({"phone_number": "Phone number is required."})
 
             room = Room.objects.select_related("organization", "hospital", "department").filter(
                 room_qr_id=room_qr_id,
@@ -2588,11 +2651,18 @@ class AnonymousFeedbackViewSet(TenantScopedQuerysetMixin, AuditReadMixin, viewse
 
             defaults = {
                 "phone_verification": challenge,
-                "phone_verified": True,
-                "phone_hash": challenge.phone_hash,
+                "phone_verified": phone_verified,
+                "phone_hash": phone_hash,
+                "contact_phone_number": contact_phone_number,
                 "target_type": target_type,
                 "target_staff_profile": target_staff_profile,
                 "status": AnonymousFeedback.Status.NEW,
+                "requires_follow_up": bool(
+                    serializer.validated_data.get("severity")
+                    in {AnonymousFeedback.Severity.HIGH, AnonymousFeedback.Severity.CRITICAL}
+                    or serializer.validated_data.get("category") in {AnonymousFeedback.Category.SAFETY, AnonymousFeedback.Category.COMPLAINT}
+                    or serializer.validated_data.get("rating", 5) <= 2
+                ),
             }
             if room:
                 defaults.update(
@@ -2615,7 +2685,8 @@ class AnonymousFeedbackViewSet(TenantScopedQuerysetMixin, AuditReadMixin, viewse
                     }
                 )
             feedback = serializer.save(**defaults)
-            challenge.mark_consumed()
+            if challenge:
+                challenge.mark_consumed()
 
         record_audit_event(
             action=AuditEvent.Action.FEEDBACK_SUBMITTED,

@@ -1410,6 +1410,7 @@ class AnonymousFeedbackSerializer(serializers.ModelSerializer):
     anonymous_session_id = serializers.CharField(required=False)
     phone_verification_challenge = serializers.UUIDField(write_only=True, required=False)
     phone_verification_token = serializers.CharField(write_only=True, required=False, trim_whitespace=True)
+    phone_number = serializers.CharField(write_only=True, required=False, allow_blank=True, max_length=40)
     target_staff_name = serializers.SerializerMethodField()
 
     class Meta:
@@ -1429,6 +1430,7 @@ class AnonymousFeedbackSerializer(serializers.ModelSerializer):
             "room_qr_id",
             "anonymous_session_id",
             "phone_hash",
+            "contact_phone_number",
             "phone_verified",
             "category",
             "severity",
@@ -1437,6 +1439,7 @@ class AnonymousFeedbackSerializer(serializers.ModelSerializer):
             "language",
             "rating",
             "comment",
+            "phone_number",
             "phone_verification_challenge",
             "phone_verification_token",
             "created_at",
@@ -1451,6 +1454,7 @@ class AnonymousFeedbackSerializer(serializers.ModelSerializer):
             "phone_verification",
             "target_staff_name",
             "phone_hash",
+            "contact_phone_number",
             "phone_verified",
             "requires_follow_up",
             "created_at",
@@ -1464,11 +1468,22 @@ class AnonymousFeedbackSerializer(serializers.ModelSerializer):
     def validate(self, attrs):
         view = self.context.get("view")
         if getattr(view, "action", "") == "create":
-            if not attrs.get("phone_verification_challenge"):
-                raise serializers.ValidationError({"phone_verification_challenge": "Phone verification is required."})
-            if not attrs.get("phone_verification_token"):
-                raise serializers.ValidationError({"phone_verification_token": "Phone verification token is required."})
+            has_verification = attrs.get("phone_verification_challenge") and attrs.get("phone_verification_token")
+            has_phone = bool(attrs.get("phone_number", "").strip())
+            if not has_verification and not has_phone:
+                raise serializers.ValidationError({"phone_number": "Phone number is required."})
+            if attrs.get("target_type") == AnonymousFeedback.TargetType.DOCTOR and not attrs.get("target_staff_profile"):
+                raise serializers.ValidationError({"target_staff_profile": "Select a doctor."})
         return attrs
+
+    def validate_phone_number(self, value: str) -> str:
+        if not value.strip():
+            return ""
+        normalized = PhoneVerificationChallenge.normalize_phone(value)
+        digits = "".join(char for char in normalized if char.isdigit())
+        if len(digits) < 8 or len(digits) > 15:
+            raise serializers.ValidationError("Enter a valid phone number.")
+        return normalized
 
     def validate_comment(self, value: str) -> str:
         return value.strip()

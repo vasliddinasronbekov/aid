@@ -260,13 +260,51 @@ export interface FeedbackPayload {
   department: string;
   room_qr_id: string;
   anonymous_session_id: string;
-  phone_verification_challenge: string;
-  phone_verification_token: string;
+  phone_number?: string;
+  phone_verification_challenge?: string;
+  phone_verification_token?: string;
   category: "GENERAL" | "COMPLAINT" | "SUGGESTION" | "PRAISE" | "SAFETY" | "STAFF_CONDUCT" | "WAIT_TIME" | "CLEANLINESS" | "PATIENT_RIGHTS";
   severity: "LOW" | "MEDIUM" | "HIGH" | "CRITICAL";
   language: string;
   rating: number;
   comment: string;
+}
+
+export interface AnonymousFeedback {
+  id: number;
+  public_id: string;
+  organization: number | null;
+  hospital: number | null;
+  department_ref: number | null;
+  room: number | null;
+  phone_verification: number | null;
+  target_type: FeedbackPayload["target_type"];
+  target_staff_profile: number | null;
+  target_staff_name: string;
+  department: string;
+  room_qr_id: string;
+  anonymous_session_id: string;
+  phone_hash: string;
+  contact_phone_number: string;
+  phone_verified: boolean;
+  category: FeedbackPayload["category"];
+  severity: FeedbackPayload["severity"];
+  status: "NEW" | "TRIAGED" | "IN_REVIEW" | "RESOLVED" | "DISMISSED";
+  requires_follow_up: boolean;
+  language: string;
+  rating: number;
+  comment: string;
+  created_at: string;
+}
+
+export interface PublicFeedbackDoctor {
+  id: number;
+  display_name: string;
+  role: Extract<StaffRole, "PHYSICIAN" | "HEAD_PHYSICIAN">;
+  organization_name: string;
+  primary_hospital_name: string;
+  department_names: string[];
+  license_number: string;
 }
 
 export interface PhoneVerificationRequestPayload {
@@ -1175,10 +1213,27 @@ export function markMergedDuplicateCandidate(candidateId: number, reviewNote = "
 }
 
 export function submitFeedback(payload: FeedbackPayload) {
-  return apiFetch("/feedback/", {
+  return apiFetch<AnonymousFeedback>("/feedback/", {
     method: "POST",
     body: JSON.stringify(payload),
   });
+}
+
+export function listFeedback(query = "") {
+  const suffix = query ? `?${query}` : "";
+  return apiFetch<PaginatedResponse<AnonymousFeedback>>(`/feedback/${suffix}`);
+}
+
+export function updateFeedback(feedbackId: number, payload: Partial<Pick<AnonymousFeedback, "status" | "requires_follow_up">>) {
+  return apiFetch<AnonymousFeedback>(`/feedback/${feedbackId}/`, {
+    method: "PATCH",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function listPublicFeedbackDoctors(query = "") {
+  const suffix = query ? `?${query}` : "";
+  return apiFetch<PublicFeedbackDoctor[]>(`/feedback/public-doctors/${suffix}`);
 }
 
 export function requestFeedbackPhoneVerification(payload: PhoneVerificationRequestPayload) {
