@@ -1425,6 +1425,7 @@ class AnonymousFeedbackSerializer(serializers.ModelSerializer):
             "phone_verification",
             "target_type",
             "target_staff_profile",
+            "target_doctor_label",
             "target_staff_name",
             "department",
             "room_qr_id",
@@ -1462,7 +1463,7 @@ class AnonymousFeedbackSerializer(serializers.ModelSerializer):
 
     def get_target_staff_name(self, obj: AnonymousFeedback) -> str:
         if not obj.target_staff_profile_id:
-            return ""
+            return obj.target_doctor_label
         return obj.target_staff_profile.user.get_full_name() or obj.target_staff_profile.user.username
 
     def validate(self, attrs):
@@ -1472,7 +1473,11 @@ class AnonymousFeedbackSerializer(serializers.ModelSerializer):
             has_phone = bool(attrs.get("phone_number", "").strip())
             if not has_verification and not has_phone:
                 raise serializers.ValidationError({"phone_number": "Phone number is required."})
-            if attrs.get("target_type") == AnonymousFeedback.TargetType.DOCTOR and not attrs.get("target_staff_profile"):
+            if (
+                attrs.get("target_type") == AnonymousFeedback.TargetType.DOCTOR
+                and not attrs.get("target_staff_profile")
+                and not attrs.get("target_doctor_label", "").strip()
+            ):
                 raise serializers.ValidationError({"target_staff_profile": "Select a doctor."})
         return attrs
 

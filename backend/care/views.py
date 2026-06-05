@@ -1,3 +1,5 @@
+import hashlib
+
 from django.conf import settings
 from django.contrib.auth import login, logout
 from django.db import models, transaction
@@ -2599,6 +2601,7 @@ class AnonymousFeedbackViewSet(TenantScopedQuerysetMixin, AuditReadMixin, viewse
             target_staff_profile = serializer.validated_data.get("target_staff_profile") or (
                 challenge.target_staff_profile if challenge else None
             )
+            target_doctor_label = serializer.validated_data.get("target_doctor_label", "").strip()
             if challenge:
                 if target_type != challenge.target_type:
                     raise ValidationError({"target_type": "Feedback target does not match verification challenge."})
@@ -2617,8 +2620,17 @@ class AnonymousFeedbackViewSet(TenantScopedQuerysetMixin, AuditReadMixin, viewse
             ).first() if room_qr_id else None
             if target_type == AnonymousFeedback.TargetType.ROOM and not room:
                 raise ValidationError({"room_qr_id": "room_qr_id was not found."})
-            if target_type == AnonymousFeedback.TargetType.DOCTOR and not target_staff_profile:
-                raise ValidationError({"target_staff_profile": "target_staff_profile is required."})
+            if target_type == AnonymousFeedback.TargetType.DOCTOR and not target_staff_profile and not target_doctor_label:
+                raise ValidationError({"target_staff_profile": "target_staff_profile or target_doctor_label is required."})
+
+            doctor_record = None
+            if target_type == AnonymousFeedback.TargetType.DOCTOR and not target_staff_profile and target_doctor_label:
+                doctor_record = (
+                    MedicalRecord.objects.select_related("organization", "hospital", "department_ref")
+                    .filter(doctor_id=target_doctor_label)
+                    .order_by("-created_at")
+                    .first()
+                )
 
             defaults = {
                 "phone_verification": challenge,
@@ -2627,6 +2639,7 @@ class AnonymousFeedbackViewSet(TenantScopedQuerysetMixin, AuditReadMixin, viewse
                 "contact_phone_number": contact_phone_number,
                 "target_type": target_type,
                 "target_staff_profile": target_staff_profile,
+                "target_doctor_label": target_doctor_label,
                 "status": AnonymousFeedback.Status.NEW,
                 "requires_follow_up": bool(
                     serializer.validated_data.get("severity")
@@ -2651,6 +2664,16 @@ class AnonymousFeedbackViewSet(TenantScopedQuerysetMixin, AuditReadMixin, viewse
                     {
                         "organization": target_staff_profile.organization,
                         "hospital": target_staff_profile.primary_hospital,
+                        "department": serializer.validated_data.get("department") or "Doctor feedback",
+                        "room_qr_id": room_qr_id,
+                    }
+                )
+            elif doctor_record:
+                defaults.update(
+                    {
+                        "organization": doctor_record.organization,
+                        "hospital": doctor_record.hospital,
+                        "department_ref": doctor_record.department_ref,
                         "department": serializer.validated_data.get("department") or "Doctor feedback",
                         "room_qr_id": room_qr_id,
                     }
@@ -2697,6 +2720,8 @@ class AnonymousFeedbackViewSet(TenantScopedQuerysetMixin, AuditReadMixin, viewse
 
 
 def public_feedback_doctors_payload(request):
+    search = request.query_params.get("search", "").strip()
+    search_lower = search.lower()
     queryset = (
         StaffProfile.objects.select_related("user", "organization", "primary_hospital")
         .prefetch_related("departments")
@@ -2705,7 +2730,6 @@ def public_feedback_doctors_payload(request):
             role__in=[StaffProfile.Role.PHYSICIAN, StaffProfile.Role.HEAD_PHYSICIAN],
         )
     )
-    search = request.query_params.get("search", "").strip()
     if search:
         queryset = queryset.filter(
             models.Q(user__first_name__icontains=search)
@@ -2713,19 +2737,90 @@ def public_feedback_doctors_payload(request):
             | models.Q(user__username__icontains=search)
             | models.Q(license_number__icontains=search)
             | models.Q(primary_hospital__name__icontains=search)
+            | models.Q(organization__name__icontains=search)
+            | models.Q(departments__name__icontains=search)
         )
-    return [
-        {
-            "id": profile.id,
-            "display_name": profile.user.get_full_name() or profile.user.username,
-            "role": profile.role,
-            "organization_name": profile.organization.name,
-            "primary_hospital_name": profile.primary_hospital.name if profile.primary_hospital else "",
-            "department_names": [department.name for department in profile.departments.all()],
-            "license_number": profile.license_number,
+    staff_doctors = []
+    staff_labels = set()
+    for profile in queryset.distinct():
+        display_name = profile.user.get_full_name() or profile.user.username
+        staff_labels.add(display_name.strip().lower())
+        staff_doctors.append(
+            {
+                "id": f"staff:{profile.id}",
+                "staff_profile_id": profile.id,
+                "doctor_label": display_name,
+                "display_name": profile.user.get_full_name() or profile.user.username,
+                "role": profile.role,
+                "source": "staff_profile",
+                "organization_name": profile.organization.name,
+                "primary_hospital_name": profile.primary_hospital.name if profile.primary_hospital else "",
+                "department_names": [department.name for department in profile.departments.all()],
+                "license_number": profile.license_number,
+            }
+        )
+
+    record_doctors_by_label = {}
+    record_queryset = (
+        MedicalRecord.objects.select_related("organization", "hospital", "department_ref")
+        .exclude(doctor_id="")
+        .order_by("-created_at")
+    )
+    if search:
+        record_queryset = record_queryset.filter(
+            models.Q(doctor_id__icontains=search)
+            | models.Q(organization__name__icontains=search)
+            | models.Q(hospital__name__icontains=search)
+            | models.Q(department_ref__name__icontains=search)
+        )
+    for record in record_queryset:
+        doctor_label = record.doctor_id.strip()
+        if not doctor_label:
+            continue
+        normalized_label = doctor_label.lower()
+        if normalized_label in staff_labels:
+            continue
+        if search and search_lower not in " ".join(
+            [
+                doctor_label,
+                record.organization.name if record.organization else "",
+                record.hospital.name if record.hospital else "",
+                record.department_ref.name if record.department_ref else "",
+            ]
+        ).lower():
+            continue
+        existing = record_doctors_by_label.get(normalized_label)
+        if existing:
+            existing["record_count"] += 1
+            if record.hospital and record.hospital.name not in existing["hospital_names"]:
+                existing["hospital_names"].append(record.hospital.name)
+            if record.department_ref and record.department_ref.name not in existing["department_names"]:
+                existing["department_names"].append(record.department_ref.name)
+            continue
+        doctor_key = hashlib.sha1(doctor_label.encode("utf-8")).hexdigest()[:16]
+        record_doctors_by_label[normalized_label] = {
+            "id": f"record:{doctor_key}",
+            "staff_profile_id": None,
+            "doctor_label": doctor_label,
+            "display_name": doctor_label,
+            "role": "PHYSICIAN",
+            "source": "medical_record",
+            "organization_name": record.organization.name if record.organization else "",
+            "primary_hospital_name": record.hospital.name if record.hospital else "",
+            "hospital_names": [record.hospital.name] if record.hospital else [],
+            "department_names": [record.department_ref.name] if record.department_ref else [],
+            "license_number": "",
+            "record_count": 1,
         }
-        for profile in queryset[:100]
+
+    record_doctors = [
+        {
+            **doctor,
+            "primary_hospital_name": doctor["primary_hospital_name"] or ", ".join(doctor["hospital_names"][:2]),
+        }
+        for doctor in record_doctors_by_label.values()
     ]
+    return sorted(staff_doctors + record_doctors, key=lambda item: item["display_name"].lower())
 
 
 class PublicFeedbackDoctorListView(APIView):

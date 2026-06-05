@@ -307,7 +307,8 @@ def broadcast_feedback_submitted(feedback: AnonymousFeedback) -> None:
         "room_qr_id": feedback.room_qr_id,
         "target_staff_name": feedback.target_staff_profile.user.get_full_name()
         if feedback.target_staff_profile_id
-        else "",
+        else feedback.target_doctor_label,
+        "target_doctor_label": feedback.target_doctor_label,
         "contact_phone_number": feedback.contact_phone_number,
         "phone_verified": feedback.phone_verified,
         "rating": feedback.rating,

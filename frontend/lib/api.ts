@@ -257,6 +257,7 @@ export interface MedicalRecordPayload {
 export interface FeedbackPayload {
   target_type: "ROOM" | "DOCTOR" | "DEPARTMENT" | "HOSPITAL";
   target_staff_profile?: number;
+  target_doctor_label?: string;
   department: string;
   room_qr_id: string;
   anonymous_session_id: string;
@@ -280,6 +281,7 @@ export interface AnonymousFeedback {
   phone_verification: number | null;
   target_type: FeedbackPayload["target_type"];
   target_staff_profile: number | null;
+  target_doctor_label: string;
   target_staff_name: string;
   department: string;
   room_qr_id: string;
@@ -298,13 +300,17 @@ export interface AnonymousFeedback {
 }
 
 export interface PublicFeedbackDoctor {
-  id: number;
+  id: string;
+  staff_profile_id: number | null;
+  doctor_label: string;
   display_name: string;
   role: Extract<StaffRole, "PHYSICIAN" | "HEAD_PHYSICIAN">;
+  source: "staff_profile" | "medical_record";
   organization_name: string;
   primary_hospital_name: string;
   department_names: string[];
   license_number: string;
+  record_count?: number;
 }
 
 export interface PhoneVerificationRequestPayload {

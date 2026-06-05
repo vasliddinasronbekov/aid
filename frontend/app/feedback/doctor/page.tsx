@@ -32,7 +32,7 @@ export default function DoctorFeedbackPage() {
   const [sessionId, setSessionId] = useState("");
   const [doctors, setDoctors] = useState<PublicFeedbackDoctor[]>([]);
   const [doctorSearch, setDoctorSearch] = useState("");
-  const [selectedDoctorId, setSelectedDoctorId] = useState<number | null>(null);
+  const [selectedDoctorId, setSelectedDoctorId] = useState<string | null>(null);
   const [phoneNumber, setPhoneNumber] = useState("");
   const [rating, setRating] = useState(0);
   const [category, setCategory] = useState<FeedbackPayload["category"]>("COMPLAINT");
@@ -96,7 +96,8 @@ export default function DoctorFeedbackPage() {
     try {
       await submitFeedback({
         target_type: "DOCTOR",
-        target_staff_profile: selectedDoctor.id,
+        target_staff_profile: selectedDoctor.staff_profile_id ?? undefined,
+        target_doctor_label: selectedDoctor.staff_profile_id ? undefined : selectedDoctor.doctor_label,
         department: selectedDoctor.department_names[0] || "Doctor feedback",
         room_qr_id: `doctor-${selectedDoctor.id}`,
         anonymous_session_id: sessionId,
@@ -173,7 +174,10 @@ export default function DoctorFeedbackPage() {
                       <div className="min-w-0">
                         <h2 className="text-sm font-semibold text-clinical-ink">{doctor.display_name}</h2>
                         <p className="mt-1 text-xs text-clinical-slate">{doctor.primary_hospital_name || doctor.organization_name}</p>
-                        <p className="mt-1 line-clamp-1 text-xs text-clinical-slate">{doctor.department_names.join(", ") || doctor.role}</p>
+                        <p className="mt-1 line-clamp-1 text-xs text-clinical-slate">
+                          {doctor.department_names.join(", ") || doctor.role}
+                          {doctor.source === "medical_record" ? ` · ${doctor.record_count ?? 1} records` : ""}
+                        </p>
                       </div>
                     </div>
                   </button>

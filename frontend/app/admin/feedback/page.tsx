@@ -109,6 +109,7 @@ export default function AdminFeedbackPage() {
     const payload = lastMessage.payload as {
       id?: number;
       target_staff_name?: string;
+      target_doctor_label?: string;
       contact_phone_number?: string;
       rating?: number;
       category?: string;
@@ -118,7 +119,7 @@ export default function AdminFeedbackPage() {
     setLiveEvents((current) => [
       {
         id: `feedback-${payload.id ?? Date.now()}`,
-        title: payload.target_staff_name || "New feedback",
+        title: payload.target_staff_name || payload.target_doctor_label || "New feedback",
         detail: `${payload.category ?? "GENERAL"} · ${payload.severity ?? "LOW"} · ${payload.contact_phone_number || "phone attached"}`,
         createdAt: formatDateTime(payload.created_at || new Date().toISOString()),
       },
@@ -131,6 +132,7 @@ export default function AdminFeedbackPage() {
     return feedback.filter((item) => {
       const text = [
         item.target_staff_name,
+        item.target_doctor_label,
         item.contact_phone_number,
         item.category,
         item.severity,
@@ -277,7 +279,7 @@ export default function AdminFeedbackPage() {
                 <button type="button" onClick={() => setSelectedId(item.id)} className="min-w-0 text-left">
                   <div className="flex flex-wrap items-center gap-2">
                     <span className={`rounded-md border px-2 py-1 text-xs font-semibold ${severityClasses(item.severity)}`}>{item.severity}</span>
-                    <h3 className="text-sm font-semibold text-clinical-ink">{item.target_staff_name || item.department || "Anonymous feedback"}</h3>
+                    <h3 className="text-sm font-semibold text-clinical-ink">{item.target_staff_name || item.target_doctor_label || item.department || "Anonymous feedback"}</h3>
                     {item.requires_follow_up ? <span className="text-xs font-semibold text-clinical-red">follow-up</span> : null}
                   </div>
                   <p className="mt-1 line-clamp-2 text-sm text-clinical-slate">{item.comment || "No comment"}</p>
@@ -331,7 +333,9 @@ export default function AdminFeedbackPage() {
                     <span className={`rounded-md border px-2 py-1 text-xs font-semibold ${severityClasses(selectedFeedback.severity)}`}>{selectedFeedback.severity}</span>
                     <span className={`rounded-md border px-2 py-1 text-xs font-semibold ${statusClasses(selectedFeedback.status)}`}>{selectedFeedback.status}</span>
                   </div>
-                  <h3 className="mt-2 text-sm font-semibold text-clinical-ink">{selectedFeedback.target_staff_name || selectedFeedback.department || "Anonymous feedback"}</h3>
+                  <h3 className="mt-2 text-sm font-semibold text-clinical-ink">
+                    {selectedFeedback.target_staff_name || selectedFeedback.target_doctor_label || selectedFeedback.department || "Anonymous feedback"}
+                  </h3>
                 </div>
                 <div className="rounded-md border border-clinical-line bg-slate-50 p-3">
                   <p className="text-xs font-semibold uppercase text-clinical-slate">Comment</p>

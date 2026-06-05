@@ -1597,6 +1597,7 @@ class AnonymousFeedback(models.Model):
         null=True,
         blank=True,
     )
+    target_doctor_label = models.CharField(max_length=180, blank=True, db_index=True)
     department = models.CharField(max_length=120, blank=True, db_index=True)
     room_qr_id = models.CharField(max_length=120, blank=True, db_index=True)
     anonymous_session_id = models.CharField(max_length=128, unique=True, default=uuid.uuid4)
