@@ -47,6 +47,10 @@ def normalize_text(*parts: str) -> str:
     return " ".join(part.lower() for part in parts if part)
 
 
+def text_has_any(text: str, *needles: str) -> bool:
+    return any(needle in text for needle in needles)
+
+
 def higher_assistant_risk(current: str, candidate: str) -> str:
     return candidate if ASSISTANT_RISK_ORDER[candidate] > ASSISTANT_RISK_ORDER[current] else current
 
@@ -55,58 +59,141 @@ def analyze_medical_record(record: MedicalRecord) -> list[ProtocolFinding]:
     patient = record.patient
     text = normalize_text(record.diagnosis, record.prescriptions, record.clinical_notes)
     findings: list[ProtocolFinding] = []
+    diagnosis_text = normalize_text(record.diagnosis)
+    prescription_text = normalize_text(record.prescriptions)
+    high_risk_patient = patient.triage_status in {patient.TriageStatus.RED, patient.TriageStatus.YELLOW}
 
-    if patient.triage_status == patient.TriageStatus.RED and "vital" not in text:
+    missing_diagnosis_markers = {
+        "",
+        "-",
+        "retsept",
+        "tashxis kiritilmagan",
+        "diagnosis missing",
+        "unknown",
+    }
+    if record.record_type in {record.RecordType.CONSULTATION, record.RecordType.FOLLOW_UP} and diagnosis_text in missing_diagnosis_markers:
+        findings.append(
+            ProtocolFinding(
+                error_type=AIErrLog.ErrorType.ENTRY_OMISSION,
+                severity=AIErrLog.Severity.HIGH if high_risk_patient else AIErrLog.Severity.MEDIUM,
+                rca_description=(
+                    f"Doctor '{record.doctor_id}' submitted a clinical record without a clear diagnosis for "
+                    f"{patient.display_name}. RCA should check whether the doctor completed the diagnostic field "
+                    "before closing the visit."
+                ),
+                protocol_reference="AID-CLINICAL-COMPLETENESS-DIAGNOSIS",
+            )
+        )
+
+    has_vitals = text_has_any(
+        text,
+        "vital",
+        "bp",
+        "aqb",
+        "qon bosim",
+        "blood pressure",
+        "pulse",
+        "puls",
+        "spo2",
+        "saturation",
+        "temper",
+        "harorat",
+        "glucose",
+        "glyukoza",
+    )
+    if high_risk_patient and not has_vitals:
         findings.append(
             ProtocolFinding(
                 error_type=AIErrLog.ErrorType.ENTRY_OMISSION,
                 severity=AIErrLog.Severity.HIGH,
                 rca_description=(
-                    "Red-zone record lacks explicit vital-sign documentation. RCA should check whether the input form "
-                    "made vital capture too easy to skip during high-load intake."
+                    f"Doctor '{record.doctor_id}' submitted a {patient.triage_status.lower()}-zone record for "
+                    f"{patient.display_name} without explicit vital-sign documentation. RCA should verify whether "
+                    "the doctor skipped vitals or the form made vital capture too easy to bypass."
                 ),
-                protocol_reference="MOH-P9-PERINATAL-REDZONE",
+                protocol_reference="AID-HIGH-RISK-VITALS-CHECK",
             )
         )
 
-    if "preeclampsia" in text and "magnesium" not in text:
+    if text_has_any(text, "preeclampsia", "preeklampsiya", "pre-eklampsiya") and not text_has_any(text, "magnesium", "magniy", "mgso4"):
         findings.append(
             ProtocolFinding(
                 error_type=AIErrLog.ErrorType.PRESCRIPTION_MISMATCH,
                 severity=AIErrLog.Severity.CRITICAL,
                 rca_description=(
-                    "Possible preeclampsia pathway without magnesium-sulfate mention. RCA should inspect protocol "
+                    f"Doctor '{record.doctor_id}' documented possible preeclampsia for {patient.display_name} "
+                    "without magnesium-sulfate or equivalent protocol mention. RCA should inspect protocol "
                     "visibility, order-set availability, and escalation handoff design."
                 ),
                 protocol_reference="MOH-P6-OBSTETRIC-SAFETY",
             )
         )
 
-    if "antibiotic" in text and "allerg" not in text:
+    if prescription_text and not text_has_any(prescription_text, "mg", "ml", "tablet", "tab", "kun", "day", "marta", "x", "dose", "doza"):
+        findings.append(
+            ProtocolFinding(
+                error_type=AIErrLog.ErrorType.PRESCRIPTION_MISMATCH,
+                severity=AIErrLog.Severity.MEDIUM,
+                rca_description=(
+                    f"Doctor '{record.doctor_id}' entered a prescription for {patient.display_name} without clear "
+                    "dose, frequency, or duration. RCA should review prescription completeness prompts."
+                ),
+                protocol_reference="AID-MEDICATION-COMPLETENESS",
+            )
+        )
+
+    if text_has_any(text, "antibiotic", "antibiotik", "cef", "amoxic", "azithro") and not text_has_any(text, "allerg", "aler", "sezuvchan"):
         findings.append(
             ProtocolFinding(
                 error_type=AIErrLog.ErrorType.ENTRY_OMISSION,
                 severity=AIErrLog.Severity.MEDIUM,
                 rca_description=(
-                    "Antibiotic plan lacks allergy status. RCA should verify whether the clinical template prompts "
-                    "allergy checks before submission."
+                    f"Doctor '{record.doctor_id}' entered an antibiotic plan for {patient.display_name} without "
+                    "allergy status. RCA should verify whether allergy checks were performed before submission."
                 ),
-                protocol_reference="MOH-P7-BLAMELESS-REPORTING",
+                protocol_reference="AID-ANTIBIOTIC-ALLERGY-CHECK",
             )
         )
 
     imaging = record.imaging_safety_metadata or {}
     imaging_text = normalize_text(str(imaging.get("notes", "")), str(imaging.get("modality", "")))
-    if record.record_type == record.RecordType.IMAGING and "preg" in imaging_text and not imaging.get("consent_confirmed"):
+    pregnancy_context = text_has_any(imaging_text, "preg", "homilador", "gravid", "gestation")
+    if record.record_type == record.RecordType.IMAGING and pregnancy_context and not imaging.get("consent_confirmed"):
         findings.append(
             ProtocolFinding(
                 error_type=AIErrLog.ErrorType.IMAGING_SAFETY,
                 severity=AIErrLog.Severity.HIGH,
                 rca_description=(
-                    "Imaging note suggests pregnancy context without consent confirmation. RCA should examine imaging "
-                    "workflow prompts and patient communication safeguards."
+                    f"Doctor '{record.doctor_id}' submitted imaging for possible pregnancy context without consent "
+                    "confirmation. RCA should examine imaging workflow prompts and patient communication safeguards."
                 ),
                 protocol_reference="MOH-P6-IMAGING-ETHICS",
+            )
+        )
+
+    needs_follow_up_plan = patient.has_severe_chronic_risk or patient.triage_status == patient.TriageStatus.RED
+    has_follow_up_plan = text_has_any(
+        text,
+        "follow",
+        "nazorat",
+        "reja",
+        "next visit",
+        "keyingi",
+        "patronaj",
+        "active call",
+        "qo'ng'iroq",
+        "qongiroq",
+    )
+    if needs_follow_up_plan and not has_follow_up_plan:
+        findings.append(
+            ProtocolFinding(
+                error_type=AIErrLog.ErrorType.ENTRY_OMISSION,
+                severity=AIErrLog.Severity.HIGH,
+                rca_description=(
+                    f"Doctor '{record.doctor_id}' closed a high-risk record for {patient.display_name} without a "
+                    "clear follow-up, patronage, or Active Call plan. RCA should review continuity-of-care handoff."
+                ),
+                protocol_reference="AID-CONTINUITY-OF-CARE-HANDOFF",
             )
         )
 
@@ -116,8 +203,9 @@ def analyze_medical_record(record: MedicalRecord) -> list[ProtocolFinding]:
                 error_type=AIErrLog.ErrorType.DIGITAL_TWIN_RISK,
                 severity=AIErrLog.Severity.HIGH,
                 rca_description=(
-                    "Digital Twin risk layer detected severe chronic risk at discharge. RCA should review continuity "
-                    "planning, regional doctor assignment, and post-discharge monitoring availability."
+                    f"Digital Twin risk layer detected severe chronic risk at discharge by doctor '{record.doctor_id}' "
+                    f"for {patient.display_name}. RCA should review continuity planning, regional doctor assignment, "
+                    "and post-discharge monitoring availability."
                 ),
                 protocol_reference="MOH-P12-DIGITAL-TWIN",
             )

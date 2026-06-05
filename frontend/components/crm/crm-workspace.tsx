@@ -21,12 +21,9 @@ import {
   Eye,
   FileText,
   Filter,
-  HeartPulse,
   Hospital,
   Languages,
   MoreHorizontal,
-  Phone,
-  Pill,
   Plus,
   Printer,
   Radio,
@@ -34,7 +31,6 @@ import {
   Save,
   Search,
   Send,
-  Settings,
   ShieldCheck,
   Sparkles,
   Stethoscope,
@@ -50,52 +46,77 @@ import { AIAssistantDock } from "@/components/crm/ai-assistant-dock";
 import { RealtimeMessage, useWebSockets } from "@/hooks/useWebSockets";
 import { useAuthGate } from "@/hooks/useAuth";
 import {
+  admitAdmission,
   cancelAppointment,
+  cancelAdmission,
+  closePerinatalEntry,
   completeAppointment,
+  completeClinicalTask,
+  completePatronageVisit,
   createAppointment,
+  createClinicalTask,
   createMedicalRecord,
   createPatient,
+  escalateAIErrorLog,
   listAppointments,
+  listClinicalTasks,
+  listAIErrorLogs,
+  listAdmissions,
+  listMedicalRecords,
+  listPatronageVisits,
   listPatients,
+  listPerinatalRegistry,
+  listReferrals,
+  listRooms,
   notificationsUrl,
   rescheduleAppointment,
+  resolvePatronageConflict,
   startAppointment,
+  startClinicalTask,
+  syncPatronageVisit,
+  transferAdmission,
+  updateAIErrorLog,
+  updatePerinatalEntry,
+  updatePerinatalRisk,
+  waitlistAdmission,
+  dischargeAdmission,
 } from "@/lib/api";
 import type {
+  Admission,
+  AIErrorLog,
   AppointmentPayload,
   BackendAppointment,
   BackendAppointmentPriority,
   BackendAppointmentType,
+  ClinicalTask,
   MedicalRecordPayload,
+  MedicalRecord,
+  PatronageVisit,
   Patient,
   PatientPayload,
+  PerinatalRegistryEntry,
+  Referral,
+  Room,
 } from "@/lib/api";
 import {
-  appointments,
   Appointment,
   AdmissionRow,
-  clinicalTasks,
   CrmModuleKey,
-  diagnosticOrders,
-  documents,
+  DocumentRow,
   duplicateCandidates,
-  hospitalBeds,
-  admissions,
+  HospitalBedRow,
   isCrmModule,
   menuGroups,
   moduleLabel,
   normalizeText,
-  patronageRows,
-  planningRows,
-  pregnantRegistry,
-  prescriptions,
   PrescriptionRow,
   PatronageRow,
-  referrals,
-  registryPatients,
   RegistryPatient,
   PregnantRegistryRow,
-  treatmentCourses,
+  TreatmentCourseRow,
+  PlanningRow,
+  ClinicalTaskRow,
+  ReferralRow,
 } from "@/lib/crm-data";
 import type { FormEvent, ReactNode } from "react";
 
@@ -148,6 +169,9 @@ type ClinicAIWarningStatus = "Yangi" | "Head doctorga yuborildi" | "Ko'rildi" | 
 
 interface ClinicAIWarning {
   id: number;
+  backendLogId: number;
+  medicalRecordId: number;
+  patientId: number | null;
   severity: ClinicAIWarningSeverity;
   patient: string;
   doctor: string;
@@ -172,6 +196,19 @@ interface DoctorActivitySignal {
   severity: ClinicAIWarningSeverity;
 }
 
+interface DoctorShortcomingSummary {
+  doctor: string;
+  total: number;
+  critical: number;
+  high: number;
+  open: number;
+  latestSignal: string;
+  latestPatient: string;
+  latestAt: string;
+  topSource: string;
+  latestWarningId: number;
+}
+
 const aiWarningSeverityStyles: Record<ClinicAIWarningSeverity, string> = {
   CRITICAL: "border-red-300 bg-red-100 text-red-950",
   HIGH: "border-red-200 bg-red-50 text-red-900",
@@ -185,91 +222,6 @@ const aiWarningStatusStyles: Record<ClinicAIWarningStatus, string> = {
   "Ko'rildi": "border-emerald-200 bg-emerald-50 text-emerald-900",
   "Vazifa ochildi": "border-amber-200 bg-amber-50 text-amber-900",
 };
-
-const initialDoctorActivitySignals: DoctorActivitySignal[] = [
-  {
-    id: 1,
-    time: "2026-06-04 09:18",
-    doctor: "Azimov Xoji Akbar",
-    patient: "Буваев Давлат Мухсинович",
-    action: "Qabul yakunlandi, I25.9, 75+ xavf guruhi",
-    module: "Qabullar",
-    aiSignal: "Chiqarilgandan keyingi Active Call va patronaj topshirig'i ko'rinmayapti.",
-    severity: "HIGH",
-  },
-  {
-    id: 2,
-    time: "2026-06-04 09:31",
-    doctor: "Perinatal navbatchi",
-    patient: "TOLANBOYEVA XURSHIDAXON OYBEKOVNA",
-    action: "BP 152/94, qizil zona homiladorlik kartasi yangilandi",
-    module: "Perinatal",
-    aiSignal: "Preeklampsiya xavfi bo'yicha shoshilinch eskalatsiya kerak.",
-    severity: "CRITICAL",
-  },
-  {
-    id: 3,
-    time: "2026-06-04 10:05",
-    doctor: "Azimov Xoji Akbar",
-    patient: "KARIMOVA MAVLUDAXON GULAMNABIYEVNA",
-    action: "Amlodipin retsepti kiritildi",
-    module: "Retseptlar",
-    aiSignal: "Dori xavfsizligi tekshirilgan, keyingi AQB nazorati muddati belgilanmagan.",
-    severity: "MEDIUM",
-  },
-  {
-    id: 4,
-    time: "2026-06-04 10:42",
-    doctor: "Olimova Nargiza",
-    patient: "NURALIYEV MUHAMMAD-UMAR-MIRZO NODIRBEK O'G'LI",
-    action: "Patronaj offline navbatda qoldi",
-    module: "Patronaj",
-    aiSignal: "Offline ma'lumot 24 soatdan oshsa, bosh shifokor nazorati kerak.",
-    severity: "MEDIUM",
-  },
-];
-
-const initialClinicAIWarnings: ClinicAIWarning[] = [
-  {
-    id: 1,
-    severity: "CRITICAL",
-    patient: "TOLANBOYEVA XURSHIDAXON OYBEKOVNA",
-    doctor: "Perinatal navbatchi",
-    department: "Homiladorlar",
-    signal: "Qizil zona homilador: BP 152/94",
-    evidence: "Perinatal karta qizil zona, xavf omillari va shoshilinch kuzatuv birga keldi.",
-    recommendedAction: "Bosh shifokorga yuborish, yotqizish holatini tasdiqlash, keyingi BP o'lchovini 30 daqiqadan kechiktirmaslik.",
-    source: "Perinatal registry + Qabul",
-    createdAt: "2026-06-04 09:32",
-    status: "Yangi",
-  },
-  {
-    id: 2,
-    severity: "HIGH",
-    patient: "Буваев Давлат Мухсинович",
-    doctor: "Azimov Xoji Akbar",
-    department: "Oilaviy shifokor",
-    signal: "75+ kardiologik bemorda davomiy parvarish topshirig'i yo'q",
-    evidence: "I25.9, RED zona, bugungi ko'rik; Active Call yoki patronaj vazifasi topilmadi.",
-    recommendedAction: "Regional oilaviy shifokorga Active Call, patronaj hamshirasiga 24 soatlik vazifa, dori mosligini qayta ko'rish.",
-    source: "Qabul + Patronaj + Retsept",
-    createdAt: "2026-06-04 09:20",
-    status: "Yangi",
-  },
-  {
-    id: 3,
-    severity: "MEDIUM",
-    patient: "NURALIYEV MUHAMMAD-UMAR-MIRZO NODIRBEK O'G'LI",
-    doctor: "Olimova Nargiza",
-    department: "Patronaj",
-    signal: "Offline patronaj sinxroni kechikmoqda",
-    evidence: "Offline navbat va konflikt xavfi mavjud; server versiyasi yangilanmagan.",
-    recommendedAction: "Hamshira planshetidan sinxronlash, konflikt bo'lsa manual review ochish.",
-    source: "Patronage tablet",
-    createdAt: "2026-06-04 10:43",
-    status: "Yangi",
-  },
-];
 
 const zoneStyles: Record<RegistryPatient["riskZone"], string> = {
   RED: "border-red-200 bg-red-50 text-red-900",
@@ -546,7 +498,7 @@ function renderModule(module: CrmModuleKey, query: string, currentUserName = "Cl
     return <DocumentsView query={query} />;
   }
   if (module === "prescriptions") {
-    return <PrescriptionsView query={query} />;
+    return <PrescriptionsView query={query} currentUserName={currentUserName} />;
   }
   if (module === "treatment-course") {
     return <TreatmentCourseView query={query} />;
@@ -558,7 +510,7 @@ function renderModule(module: CrmModuleKey, query: string, currentUserName = "Cl
     return <PatronageView query={query} />;
   }
   if (module === "planning" || module === "scheduled") {
-    return <PlanningView module={module} />;
+    return <PlanningView module={module} query={query} />;
   }
   if (module === "settings") {
     return <SettingsView />;
@@ -1455,6 +1407,682 @@ function buildMedicalRecordPayload(
   };
 }
 
+type AdmissionDashboardRow = AdmissionRow & {
+  backendStatus: Admission["status"];
+  departmentId: number | null;
+  roomId: number | null;
+};
+
+function formatBackendDateTime(value?: string | null) {
+  if (!value) {
+    return "";
+  }
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return value.slice(0, 16).replace("T", " ");
+  }
+  const day = date.toISOString().slice(0, 10);
+  const time = `${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
+  return `${day} ${time}`;
+}
+
+function triageLabel(status: Patient["triage_status"]): AdmissionRow["triage"] {
+  if (status === "RED") {
+    return "Qizil";
+  }
+  if (status === "YELLOW") {
+    return "Sariq";
+  }
+  return "Yashil";
+}
+
+function admissionStatusLabel(status: Admission["status"]): AdmissionRow["status"] {
+  const labels: Record<Admission["status"], AdmissionRow["status"]> = {
+    REQUESTED: "So'rov",
+    WAITLISTED: "Navbat",
+    ADMITTED: "Yotqizildi",
+    TRANSFERRED: "Ko'chirildi",
+    DISCHARGED: "Chiqarildi",
+    CANCELLED: "Bekor",
+  };
+  return labels[status];
+}
+
+function admissionPriorityLabel(priority: Admission["priority"]): AdmissionRow["priority"] {
+  if (priority === "CRITICAL") {
+    return "Kritik";
+  }
+  if (priority === "URGENT") {
+    return "Shoshilinch";
+  }
+  return "Rejali";
+}
+
+function admissionRowFromBackend(admission: Admission): AdmissionDashboardRow {
+  return {
+    id: admission.id,
+    patientId: admission.patient,
+    patient: admission.patient_name,
+    department: admission.department_name || admission.hospital_name || "Belgilanmagan",
+    room: admission.room_label || "Xona belgilanmagan",
+    triage: triageLabel(admission.patient_triage_status),
+    requestedAt: formatBackendDateTime(admission.requested_at),
+    status: admissionStatusLabel(admission.status),
+    priority: admissionPriorityLabel(admission.priority),
+    reason: admission.reason || "Sabab kiritilmagan",
+    assignedTo: admission.admitting_provider_name || admission.requested_by_name || "Belgilanmagan",
+    backendStatus: admission.status,
+    departmentId: admission.department_ref,
+    roomId: admission.room,
+  };
+}
+
+function hospitalBedsFromBackend(rooms: Room[], admissions: AdmissionDashboardRow[]): HospitalBedRow[] {
+  const rows = new Map<string, HospitalBedRow>();
+  const ensureRow = (unit: string) => {
+    const key = unit || "Belgilanmagan";
+    if (!rows.has(key)) {
+      rows.set(key, { unit: key, beds: 0, occupied: 0, waiting: 0, critical: 0 });
+    }
+    return rows.get(key)!;
+  };
+
+  rooms
+    .filter((room) => room.is_active)
+    .forEach((room) => {
+      const row = ensureRow(room.department_name || room.hospital_name || "Belgilanmagan");
+      row.beds += room.bed_count;
+    });
+
+  admissions.forEach((admission) => {
+    const row = ensureRow(admission.department);
+    if (admission.backendStatus === "ADMITTED" || admission.backendStatus === "TRANSFERRED") {
+      row.occupied += 1;
+    }
+    if (admission.backendStatus === "REQUESTED" || admission.backendStatus === "WAITLISTED") {
+      row.waiting += 1;
+    }
+    if (admission.priority === "Kritik" || admission.triage === "Qizil") {
+      row.critical += 1;
+    }
+    if (!row.beds) {
+      row.beds = Math.max(row.occupied + row.waiting, 1);
+    }
+  });
+
+  return Array.from(rows.values()).sort((left, right) => left.unit.localeCompare(right.unit));
+}
+
+function medicalRecordSafetyLabel(status?: MedicalRecord["ai_review_status"]) {
+  const labels: Record<NonNullable<MedicalRecord["ai_review_status"]>, string> = {
+    PENDING: "AI orqa nazoratda",
+    CLEAR: "Xavfsiz",
+    NEEDS_REVIEW: "Bosh shifokor ko'radi",
+    CRITICAL: "Kritik signal yuborilgan",
+  };
+  return status ? labels[status] : "AI tekshiruv kutilmoqda";
+}
+
+function medicalRecordDocumentRow(record: MedicalRecord): DocumentRow {
+  const typeLabels: Record<MedicalRecord["record_type"], string> = {
+    CONSULTATION: "Qabul yozuvi",
+    IMAGING: "KT/MRT/UTT xulosasi",
+    DISCHARGE: "Chiqarish xulosasi",
+    FOLLOW_UP: "Kuzatuv yozuvi",
+  };
+  return {
+    title: record.diagnosis || typeLabels[record.record_type],
+    patient: record.patient_name,
+    type: typeLabels[record.record_type],
+    owner: record.doctor_id || "Belgilanmagan",
+    updatedAt: formatBackendDateTime(record.updated_at),
+    status: record.discharge_status === "DISCHARGED" ? "Yopilgan" : medicalRecordSafetyLabel(record.ai_review_status),
+  };
+}
+
+function prescriptionRowFromRecord(record: MedicalRecord): PrescriptionRow | null {
+  const prescription = record.prescriptions.trim();
+  if (!prescription) {
+    return null;
+  }
+  const [firstLine, ...rest] = prescription.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  return {
+    patient: record.patient_name,
+    medication: firstLine || "Retsept",
+    dose: rest.join("; ") || record.diagnosis || "Doza yozuvi kiritilmagan",
+    duration: formatBackendDate(record.created_at),
+    status: record.discharge_status === "DISCHARGED" ? "Yakunlangan" : "Faol",
+    safety: medicalRecordSafetyLabel(record.ai_review_status),
+  };
+}
+
+function taskPriorityLabel(priority: ClinicalTask["priority"]): ClinicalTaskRow["priority"] {
+  if (priority === "CRITICAL" || priority === "URGENT") {
+    return "Yuqori";
+  }
+  if (priority === "SOON") {
+    return "O'rta";
+  }
+  return "Past";
+}
+
+function clinicalTaskStatusLabel(status: ClinicalTask["status"]): ClinicalTaskRow["status"] {
+  const labels: Record<ClinicalTask["status"], ClinicalTaskRow["status"]> = {
+    OPEN: "Ochiq",
+    IN_PROGRESS: "Jarayonda",
+    BLOCKED: "Ochiq",
+    COMPLETED: "Bajarildi",
+    CANCELLED: "Bekor",
+  };
+  return labels[status];
+}
+
+function clinicalTaskRowFromBackend(task: ClinicalTask): ClinicalTaskRow {
+  return {
+    id: task.id,
+    patientId: task.patient ?? 0,
+    title: task.title,
+    owner: task.assigned_to_name || task.created_by_name || "Belgilanmagan",
+    type: task.task_type.replaceAll("_", " "),
+    dueAt: formatBackendDateTime(task.due_at) || formatBackendDateTime(task.created_at),
+    priority: taskPriorityLabel(task.priority),
+    status: clinicalTaskStatusLabel(task.status),
+  };
+}
+
+function referralPriorityLabel(priority: Referral["priority"]): ReferralRow["priority"] {
+  if (priority === "CRITICAL" || priority === "URGENT") {
+    return "Yuqori";
+  }
+  if (priority === "SOON") {
+    return "O'rta";
+  }
+  return "Past";
+}
+
+function referralStatusLabel(status: Referral["status"]): ReferralRow["status"] {
+  const labels: Record<Referral["status"], ReferralRow["status"]> = {
+    DRAFT: "So'rov",
+    REQUESTED: "So'rov",
+    ACCEPTED: "Qabul qilindi",
+    SCHEDULED: "Rejalashtirildi",
+    COMPLETED: "Bajarildi",
+    CANCELLED: "Bekor",
+  };
+  return labels[status];
+}
+
+function referralRowFromBackend(referral: Referral): ReferralRow {
+  return {
+    id: referral.id,
+    patientId: referral.patient,
+    target: referral.target_department_name || referral.target_hospital_name || referral.referral_type.replaceAll("_", " "),
+    type: referral.referral_type.replaceAll("_", " "),
+    requestedAt: formatBackendDateTime(referral.requested_at),
+    priority: referralPriorityLabel(referral.priority),
+    status: referralStatusLabel(referral.status),
+    reason: referral.reason || referral.clinical_summary || "Sabab kiritilmagan",
+  };
+}
+
+function treatmentCourseRowsFromBackend(records: MedicalRecord[], tasks: ClinicalTask[]): TreatmentCourseRow[] {
+  const groups = new Map<number, MedicalRecord[]>();
+  records.forEach((record) => {
+    const list = groups.get(record.patient) ?? [];
+    list.push(record);
+    groups.set(record.patient, list);
+  });
+
+  return Array.from(groups.entries())
+    .map(([patientId, patientRecords]) => {
+      const latest = [...patientRecords].sort((left, right) => right.created_at.localeCompare(left.created_at))[0];
+      const patientTasks = tasks.filter((task) => task.patient === patientId);
+      const actionableTasks = patientTasks.filter((task) => task.status !== "CANCELLED");
+      const completedTasks = actionableTasks.filter((task) => task.status === "COMPLETED");
+      const progress = actionableTasks.length
+        ? Math.round((completedTasks.length / actionableTasks.length) * 100)
+        : latest.discharge_status === "DISCHARGED"
+          ? 100
+          : latest.ai_review_status === "CLEAR"
+            ? 60
+            : 25;
+      const nextTask = [...patientTasks]
+        .filter((task) => task.status === "OPEN" || task.status === "IN_PROGRESS" || task.status === "BLOCKED")
+        .sort((left, right) => String(left.due_at ?? left.created_at).localeCompare(String(right.due_at ?? right.created_at)))[0];
+
+      return {
+        patient: latest.patient_name,
+        diagnosis: latest.diagnosis || "Tashxis kiritilmagan",
+        startedAt: formatBackendDate(latest.created_at),
+        progress,
+        nextAction: nextTask
+          ? `${nextTask.title} (${formatBackendDateTime(nextTask.due_at) || "muddat belgilanmagan"})`
+          : latest.discharge_status === "DISCHARGED"
+            ? "Kurs yopilgan, discharge xulosasi mavjud"
+            : "Keyingi klinik vazifa belgilanmagan",
+      };
+    })
+    .sort((left, right) => right.startedAt.localeCompare(left.startedAt));
+}
+
+function perinatalRiskZone(risk: PerinatalRegistryEntry["risk_level"]): PregnantRegistryRow["riskZone"] {
+  if (risk === "CRITICAL" || risk === "HIGH") {
+    return "Qizil";
+  }
+  if (risk === "MODERATE") {
+    return "Sariq";
+  }
+  return "Yashil";
+}
+
+function perinatalStatusLabel(status: PerinatalRegistryEntry["status"]): PregnantRegistryRow["status"] {
+  const labels: Record<PerinatalRegistryEntry["status"], PregnantRegistryRow["status"]> = {
+    ACTIVE: "Faol",
+    WATCHLIST: "Kuzatuv",
+    HOSPITALIZED: "Yotqizildi",
+    DELIVERED: "Tug'ruq",
+    CLOSED: "Yopildi",
+  };
+  return labels[status];
+}
+
+function perinatalRowFromBackend(entry: PerinatalRegistryEntry): PregnantRegistryRow {
+  return {
+    id: entry.id,
+    patientId: entry.patient,
+    patient: entry.patient_name,
+    week: entry.gestational_age_weeks,
+    day: entry.gestational_age_days,
+    riskZone: perinatalRiskZone(entry.risk_level),
+    bp: entry.latest_systolic_bp && entry.latest_diastolic_bp ? `${entry.latest_systolic_bp}/${entry.latest_diastolic_bp}` : "Kiritilmagan",
+    gravida: entry.gravida,
+    para: entry.para,
+    edd: formatBackendDate(entry.estimated_due_date),
+    lastScreening: formatBackendDate(entry.updated_at),
+    nextVisit: formatBackendDate(entry.next_visit_at),
+    status: perinatalStatusLabel(entry.status),
+    provider: entry.assigned_provider_name || entry.department_name || "Belgilanmagan",
+    riskFactors: entry.risk_factors,
+    fetalNote: entry.fetal_notes || entry.enrollment_reason || "Fetal yozuv kiritilmagan",
+  };
+}
+
+function patronageVisitTypeLabel(type: PatronageVisit["visit_type"]): PatronageRow["visitType"] {
+  const labels: Record<PatronageVisit["visit_type"], PatronageRow["visitType"]> = {
+    ROUTINE: "Rejali",
+    HIGH_RISK: "Yuqori xavf",
+    POST_DISCHARGE: "Chiqarilgandan keyin",
+    PERINATAL: "Perinatal",
+    CHRONIC: "Surunkali",
+    NEWBORN: "Yuqori xavf",
+  };
+  return labels[type];
+}
+
+function patronageStatusLabel(status: PatronageVisit["status"]): PatronageRow["status"] {
+  const labels: Record<PatronageVisit["status"], PatronageRow["status"]> = {
+    PLANNED: "Rejada",
+    OFFLINE_QUEUED: "Offline navbat",
+    SYNCED: "Sinxronlandi",
+    CONFLICT: "Konflikt",
+    COMPLETED: "Bajarildi",
+    CANCELLED: "Bekor",
+  };
+  return labels[status];
+}
+
+function patronageSyncLabel(status: PatronageVisit["status"]): PatronageRow["sync"] {
+  if (status === "OFFLINE_QUEUED") {
+    return "Navbatda";
+  }
+  if (status === "CONFLICT") {
+    return "Konflikt";
+  }
+  if (status === "CANCELLED") {
+    return "Qayta ko'rish";
+  }
+  return "Serverda";
+}
+
+function patronageRowFromBackend(visit: PatronageVisit): PatronageRow {
+  return {
+    id: visit.id,
+    patientId: visit.patient,
+    patient: visit.patient_name,
+    territory: visit.territory || visit.hospital_name || "Hudud belgilanmagan",
+    nurse: visit.assigned_to_name || visit.created_by_name || "Belgilanmagan",
+    visitType: patronageVisitTypeLabel(visit.visit_type),
+    visitDate: formatBackendDateTime(visit.scheduled_for),
+    priority: taskPriorityLabel(visit.priority),
+    sync: patronageSyncLabel(visit.status),
+    status: patronageStatusLabel(visit.status),
+    offlineId: visit.client_reference || visit.idempotency_key || visit.public_id,
+    lastSync: formatBackendDateTime(visit.synced_at) || formatBackendDateTime(visit.updated_at),
+    serverVersion: visit.server_version,
+    notes: visit.notes || visit.conflict_reason || "Izoh kiritilmagan",
+  };
+}
+
+function planningRowsFromBackend(
+  appointmentsList: BackendAppointment[],
+  tasks: ClinicalTask[],
+  patronageVisits: PatronageVisit[],
+): PlanningRow[] {
+  const appointmentRows: PlanningRow[] = appointmentsList.map((appointment) => ({
+    title: `Qabul: ${appointment.patient_name}`,
+    owner: appointment.provider_name || appointment.created_by_name || "Belgilanmagan",
+    date: formatBackendDateTime(appointment.scheduled_start),
+    department: departmentFromAppointmentType(appointment.appointment_type, appointment.department_name),
+    status: backendStatusToAppointmentStatus(appointment.status),
+  }));
+  const taskRows: PlanningRow[] = tasks.map((task) => ({
+    title: task.title,
+    owner: task.assigned_to_name || task.created_by_name || "Belgilanmagan",
+    date: formatBackendDateTime(task.due_at) || formatBackendDateTime(task.created_at),
+    department: task.department_name || task.task_type.replaceAll("_", " "),
+    status: clinicalTaskStatusLabel(task.status),
+  }));
+  const patronageRowsFromBackend: PlanningRow[] = patronageVisits.map((visit) => ({
+    title: `Patronaj: ${visit.patient_name}`,
+    owner: visit.assigned_to_name || visit.created_by_name || "Belgilanmagan",
+    date: formatBackendDateTime(visit.scheduled_for),
+    department: visit.territory || visit.visit_type.replaceAll("_", " "),
+    status: patronageStatusLabel(visit.status),
+  }));
+
+  return [...appointmentRows, ...taskRows, ...patronageRowsFromBackend]
+    .filter((row) => row.date)
+    .sort((left, right) => left.date.localeCompare(right.date))
+    .slice(0, 24);
+}
+
+function biomarkerNumber(patient: Patient, key: string) {
+  const value = patient.chronic_biomarkers?.[key];
+  if (typeof value === "number") {
+    return value;
+  }
+  if (typeof value === "string") {
+    const parsed = Number.parseFloat(value.replace("%", ""));
+    return Number.isFinite(parsed) ? parsed : 0;
+  }
+  return 0;
+}
+
+function percentage(count: number, total: number) {
+  return total ? Math.round((count / total) * 100) : 0;
+}
+
+function aiErrorTypeLabel(errorType: AIErrorLog["error_type"]) {
+  const labels: Record<AIErrorLog["error_type"], string> = {
+    ENTRY_OMISSION: "Klinik yozuvda muhim maydon yetishmayapti",
+    PRESCRIPTION_MISMATCH: "Dori xavfsizligi mos kelmasligi",
+    ETHICAL_DEVIATION: "Etik yoki protokol og'ishi",
+    IMAGING_SAFETY: "KT/MRT/UTT xavfsizlik signali",
+    DIGITAL_TWIN_RISK: "Digital Twin yuqori xavf signali",
+  };
+  return labels[errorType];
+}
+
+function medicalRecordTypeLabel(type: MedicalRecord["record_type"]) {
+  const labels: Record<MedicalRecord["record_type"], string> = {
+    CONSULTATION: "Qabul yozuvi",
+    IMAGING: "Tasvirlash yozuvi",
+    DISCHARGE: "Chiqarish xulosasi",
+    FOLLOW_UP: "Kuzatuv yozuvi",
+  };
+  return labels[type];
+}
+
+function taskSourceLogId(task: ClinicalTask) {
+  const value = task.metadata?.source_ai_error_log_id;
+  if (typeof value === "number") {
+    return value;
+  }
+  if (typeof value === "string") {
+    const parsed = Number.parseInt(value, 10);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  return null;
+}
+
+function aiWarningStatusFromLog(log: AIErrorLog, tasks: ClinicalTask[]): ClinicAIWarningStatus {
+  if (tasks.some((task) => taskSourceLogId(task) === log.id && task.status !== "CANCELLED")) {
+    return "Vazifa ochildi";
+  }
+  if (log.reviewed_by_admin) {
+    return "Ko'rildi";
+  }
+  if (log.severity === "HIGH" || log.severity === "CRITICAL") {
+    return "Head doctorga yuborildi";
+  }
+  return "Yangi";
+}
+
+function recommendedActionForAIError(log: AIErrorLog) {
+  if (log.severity === "CRITICAL") {
+    return "Bosh shifokor tezkor ko'rigi, RCA yozuvi va mas'ul klinik vazifa ochish.";
+  }
+  if (log.severity === "HIGH") {
+    return "Head doctor ko'rib chiqishi, shifokor yozuvini tekshirish va muddatli vazifa ochish.";
+  }
+  if (log.error_type === "PRESCRIPTION_MISMATCH") {
+    return "Dori ro'yxati va bemor risk omillarini qayta solishtirish.";
+  }
+  return "Klinik yozuvni audit qilib, yetishmayotgan ma'lumotni to'ldirish.";
+}
+
+function aiWarningFromLog(log: AIErrorLog, records: MedicalRecord[], tasks: ClinicalTask[]): ClinicAIWarning {
+  const record = records.find((item) => item.id === log.medical_record);
+  return {
+    id: log.id,
+    backendLogId: log.id,
+    medicalRecordId: log.medical_record,
+    patientId: record?.patient ?? null,
+    severity: log.severity,
+    patient: log.patient_name,
+    doctor: log.doctor_id || "Belgilanmagan shifokor",
+    department: record?.department_ref ? `Bo'lim #${record.department_ref}` : "AI safety",
+    signal: aiErrorTypeLabel(log.error_type),
+    evidence: log.rca_description || "AI safety review tafsiloti kiritilmagan.",
+    recommendedAction: recommendedActionForAIError(log),
+    source: `${medicalRecordTypeLabel(record?.record_type ?? "CONSULTATION")} #${log.medical_record}`,
+    createdAt: formatBackendDateTime(log.created_at),
+    status: aiWarningStatusFromLog(log, tasks),
+    sentAt: log.reviewed_by_admin ? undefined : formatBackendDateTime(log.created_at),
+  };
+}
+
+function warningSeverityFromRecord(record: MedicalRecord): ClinicAIWarningSeverity {
+  if (record.ai_review_status === "CRITICAL") {
+    return "CRITICAL";
+  }
+  if (record.ai_review_status === "NEEDS_REVIEW") {
+    return "HIGH";
+  }
+  if (record.ai_review_status === "PENDING") {
+    return "MEDIUM";
+  }
+  return "LOW";
+}
+
+function warningSeverityFromAppointment(appointment: BackendAppointment): ClinicAIWarningSeverity {
+  if (appointment.priority === "CRITICAL") {
+    return "CRITICAL";
+  }
+  if (appointment.priority === "URGENT") {
+    return "HIGH";
+  }
+  if (appointment.priority === "SOON") {
+    return "MEDIUM";
+  }
+  return "LOW";
+}
+
+function warningSeverityFromPerinatal(entry: PerinatalRegistryEntry): ClinicAIWarningSeverity {
+  if (entry.risk_level === "CRITICAL") {
+    return "CRITICAL";
+  }
+  if (entry.risk_level === "HIGH") {
+    return "HIGH";
+  }
+  if (entry.risk_level === "MODERATE") {
+    return "MEDIUM";
+  }
+  return "LOW";
+}
+
+function warningSeverityFromPatronage(visit: PatronageVisit): ClinicAIWarningSeverity {
+  if (visit.status === "CONFLICT" || visit.priority === "CRITICAL") {
+    return "HIGH";
+  }
+  if (visit.status === "OFFLINE_QUEUED" || visit.priority === "URGENT") {
+    return "MEDIUM";
+  }
+  return "LOW";
+}
+
+function warningSeverityFromTask(task: ClinicalTask): ClinicAIWarningSeverity {
+  const priority = taskPriorityLabel(task.priority);
+  if (priority === "Yuqori") {
+    return "HIGH";
+  }
+  if (priority === "O'rta") {
+    return "MEDIUM";
+  }
+  return "LOW";
+}
+
+function activitySignalsFromBackend(
+  logs: AIErrorLog[],
+  records: MedicalRecord[],
+  appointmentsList: BackendAppointment[],
+  tasks: ClinicalTask[],
+  patronageVisits: PatronageVisit[],
+  perinatalEntries: PerinatalRegistryEntry[],
+): DoctorActivitySignal[] {
+  let nextId = 1;
+  const rows: DoctorActivitySignal[] = [
+    ...logs.map((log) => ({
+      id: nextId++,
+      time: formatBackendDateTime(log.created_at),
+      doctor: log.doctor_id || "AI safety",
+      patient: log.patient_name,
+      action: aiErrorTypeLabel(log.error_type),
+      module: "AI analyzes",
+      aiSignal: log.rca_description || "AI safety review signali.",
+      severity: log.severity,
+    })),
+    ...records.map((record) => ({
+      id: nextId++,
+      time: formatBackendDateTime(record.created_at),
+      doctor: record.doctor_id || "Belgilanmagan",
+      patient: record.patient_name,
+      action: `${medicalRecordTypeLabel(record.record_type)}: ${record.diagnosis || "Tashxis kiritilmagan"}`,
+      module: "Tibbiy yozuv",
+      aiSignal: medicalRecordSafetyLabel(record.ai_review_status),
+      severity: warningSeverityFromRecord(record),
+    })),
+    ...appointmentsList.map((appointment) => ({
+      id: nextId++,
+      time: formatBackendDateTime(appointment.updated_at || appointment.created_at),
+      doctor: appointment.provider_name || appointment.created_by_name || "Belgilanmagan",
+      patient: appointment.patient_name,
+      action: `${departmentFromAppointmentType(appointment.appointment_type, appointment.department_name)}: ${backendStatusToAppointmentStatus(appointment.status)}`,
+      module: "Qabullar",
+      aiSignal: appointment.priority === "CRITICAL" ? "Kritik ustuvor qabul bosh shifokor nazoratida." : appointment.reason || "Qabul oqimi kuzatuvda.",
+      severity: warningSeverityFromAppointment(appointment),
+    })),
+    ...tasks.map((task) => ({
+      id: nextId++,
+      time: formatBackendDateTime(task.updated_at),
+      doctor: task.assigned_to_name || task.created_by_name || "Belgilanmagan",
+      patient: task.patient_name || "Bemor biriktirilmagan",
+      action: `${task.title}: ${clinicalTaskStatusLabel(task.status)}`,
+      module: "Klinik vazifa",
+      aiSignal: task.description || "Vazifa oqimi nazoratda.",
+      severity: warningSeverityFromTask(task),
+    })),
+    ...patronageVisits.map((visit) => ({
+      id: nextId++,
+      time: formatBackendDateTime(visit.updated_at),
+      doctor: visit.assigned_to_name || visit.created_by_name || "Patronaj",
+      patient: visit.patient_name,
+      action: `${patronageVisitTypeLabel(visit.visit_type)}: ${patronageStatusLabel(visit.status)}`,
+      module: "Patronaj",
+      aiSignal: visit.conflict_reason || visit.notes || "Patronaj sinxron holati nazoratda.",
+      severity: warningSeverityFromPatronage(visit),
+    })),
+    ...perinatalEntries.map((entry) => ({
+      id: nextId++,
+      time: formatBackendDateTime(entry.updated_at),
+      doctor: entry.assigned_provider_name || entry.department_name || "Perinatal",
+      patient: entry.patient_name,
+      action: `Perinatal ${perinatalStatusLabel(entry.status)}: ${entry.gestational_age_weeks}w ${entry.gestational_age_days}d`,
+      module: "Perinatal",
+      aiSignal: entry.fetal_notes || entry.enrollment_reason || "Perinatal xavf zonasi nazoratda.",
+      severity: warningSeverityFromPerinatal(entry),
+    })),
+  ];
+
+  return rows
+    .filter((row) => row.time)
+    .sort((left, right) => right.time.localeCompare(left.time))
+    .slice(0, 40);
+}
+
+function taskPriorityFromWarning(severity: ClinicAIWarningSeverity): ClinicalTask["priority"] {
+  if (severity === "CRITICAL") {
+    return "CRITICAL";
+  }
+  if (severity === "HIGH") {
+    return "URGENT";
+  }
+  if (severity === "MEDIUM") {
+    return "SOON";
+  }
+  return "ROUTINE";
+}
+
+function dueAtFromSeverity(severity: ClinicAIWarningSeverity) {
+  const date = new Date();
+  date.setHours(date.getHours() + (severity === "CRITICAL" ? 2 : severity === "HIGH" ? 8 : 24));
+  return date.toISOString();
+}
+
+function doctorShortcomingSummaries(warnings: ClinicAIWarning[]): DoctorShortcomingSummary[] {
+  const grouped = new Map<string, ClinicAIWarning[]>();
+  warnings.forEach((warning) => {
+    const key = warning.doctor || "Belgilanmagan shifokor";
+    grouped.set(key, [...(grouped.get(key) ?? []), warning]);
+  });
+
+  return Array.from(grouped.entries())
+    .map(([doctor, doctorWarnings]) => {
+      const sorted = [...doctorWarnings].sort((left, right) => right.createdAt.localeCompare(left.createdAt));
+      const latest = sorted[0];
+      const sourceCounts = doctorWarnings.reduce<Record<string, number>>((counts, warning) => {
+        counts[warning.signal] = (counts[warning.signal] ?? 0) + 1;
+        return counts;
+      }, {});
+      const topSource =
+        Object.entries(sourceCounts).sort((left, right) => right[1] - left[1])[0]?.[0] ?? latest.signal;
+
+      return {
+        doctor,
+        total: doctorWarnings.length,
+        critical: doctorWarnings.filter((warning) => warning.severity === "CRITICAL").length,
+        high: doctorWarnings.filter((warning) => warning.severity === "HIGH").length,
+        open: doctorWarnings.filter((warning) => warning.status !== "Ko'rildi").length,
+        latestSignal: latest.signal,
+        latestPatient: latest.patient,
+        latestAt: latest.createdAt,
+        topSource,
+        latestWarningId: latest.id,
+      };
+    })
+    .sort((left, right) => right.critical - left.critical || right.high - left.high || right.open - left.open || right.total - left.total);
+}
+
 function SafetyReviewBadge({ review }: { review?: AppointmentSafetyReview }) {
   if (!review) {
     return (
@@ -2140,21 +2768,108 @@ function AppointmentsView({ module, query }: { module: CrmModuleKey; query: stri
 }
 
 function HospitalView({ module }: { module: CrmModuleKey }) {
-  const [queue, setQueue] = useState<AdmissionRow[]>(admissions);
-  const updateAdmissionStatus = (admissionId: number, statusValue: AdmissionRow["status"]) => {
-    setQueue((current) => current.map((row) => (row.id === admissionId ? { ...row, status: statusValue } : row)));
-  };
+  const [queue, setQueue] = useState<AdmissionDashboardRow[]>([]);
+  const [beds, setBeds] = useState<HospitalBedRow[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [message, setMessage] = useState("");
   const activeAdmissions = queue.filter((row) => row.status === "Yotqizildi" || row.status === "Ko'chirildi");
   const waitingAdmissions = queue.filter((row) => row.status === "So'rov" || row.status === "Navbat");
+
+  useEffect(() => {
+    let active = true;
+    setLoading(true);
+    Promise.all([listRooms(), listAdmissions()])
+      .then(([roomResponse, admissionResponse]) => {
+        if (!active) {
+          return;
+        }
+        const mappedAdmissions = admissionResponse.results.map(admissionRowFromBackend);
+        setQueue(mappedAdmissions);
+        setBeds(hospitalBedsFromBackend(roomResponse.results, mappedAdmissions));
+        setMessage("");
+      })
+      .catch((error) => {
+        if (!active) {
+          return;
+        }
+        setQueue([]);
+        setBeds([]);
+        setMessage(error instanceof Error ? error.message : "Hospital backend data could not be loaded.");
+      })
+      .finally(() => {
+        if (active) {
+          setLoading(false);
+        }
+      });
+
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  const updateAdmissionStatus = async (row: AdmissionDashboardRow, action: "waitlist" | "admit" | "transfer" | "discharge" | "cancel") => {
+    try {
+      const admission =
+        action === "waitlist"
+          ? await waitlistAdmission(row.id)
+          : action === "admit"
+            ? await admitAdmission(row.id)
+            : action === "transfer"
+              ? await transferAdmission(row.id, row.roomId ? { room: row.roomId } : row.departmentId ? { department_ref: row.departmentId } : {})
+              : action === "discharge"
+                ? await dischargeAdmission(row.id, "Discharged from CRM hospital board")
+                : await cancelAdmission(row.id, "Cancelled from CRM hospital board");
+      const next = admissionRowFromBackend(admission);
+      setQueue((current) => {
+        const updated = current.map((item) => (item.id === next.id ? next : item));
+        setBeds((currentBeds) => {
+          const baseRooms = currentBeds.map((bed) => ({ ...bed, occupied: 0, waiting: 0, critical: 0 }));
+          if (!baseRooms.length) {
+            return hospitalBedsFromBackend([], updated);
+          }
+          const bedMap = new Map(baseRooms.map((bed) => [bed.unit, bed]));
+          updated.forEach((admissionRow) => {
+            const bed = bedMap.get(admissionRow.department) ?? {
+              unit: admissionRow.department,
+              beds: Math.max(1, Number(admissionRow.backendStatus === "ADMITTED" || admissionRow.backendStatus === "TRANSFERRED")),
+              occupied: 0,
+              waiting: 0,
+              critical: 0,
+            };
+            if (admissionRow.backendStatus === "ADMITTED" || admissionRow.backendStatus === "TRANSFERRED") {
+              bed.occupied += 1;
+            }
+            if (admissionRow.backendStatus === "REQUESTED" || admissionRow.backendStatus === "WAITLISTED") {
+              bed.waiting += 1;
+            }
+            if (admissionRow.priority === "Kritik" || admissionRow.triage === "Qizil") {
+              bed.critical += 1;
+            }
+            bedMap.set(admissionRow.department, bed);
+          });
+          return Array.from(bedMap.values()).sort((left, right) => left.unit.localeCompare(right.unit));
+        });
+        return updated;
+      });
+      setMessage("");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Admission action failed.");
+    }
+  };
 
   return (
     <div className="space-y-4">
       <div className="grid gap-3 md:grid-cols-4">
-        <StatCard label="Jami o'rin" value={String(hospitalBeds.reduce((sum, row) => sum + row.beds, 0))} icon={Bed} />
+        <StatCard label="Jami o'rin" value={String(beds.reduce((sum, row) => sum + row.beds, 0))} icon={Bed} />
         <StatCard label="Yotqizilgan" value={String(activeAdmissions.length)} icon={Hospital} tone="amber" />
         <StatCard label="Navbatda" value={String(waitingAdmissions.length)} icon={Clock3} />
         <StatCard label="Kritik" value={String(queue.filter((row) => row.priority === "Kritik" || row.triage === "Qizil").length)} icon={AlertTriangle} tone="red" />
       </div>
+      {message ? (
+        <div className="rounded-md border border-red-100 bg-red-50 px-4 py-3 text-sm text-red-900">
+          {message}
+        </div>
+      ) : null}
       <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_420px]">
         <section className="rounded-md border border-clinical-line bg-white shadow-sm">
           <div className="border-b border-clinical-line px-4 py-3">
@@ -2162,25 +2877,31 @@ function HospitalView({ module }: { module: CrmModuleKey }) {
             <p className="text-sm text-clinical-slate">Bo'limlar kesimida o'rinlar va yuklama</p>
           </div>
           <div className="divide-y divide-clinical-line">
-            {hospitalBeds.map((row) => {
-              const percent = Math.round((row.occupied / row.beds) * 100);
-              return (
-                <div key={row.unit} className="px-4 py-4">
-                  <div className="flex items-center justify-between gap-3">
-                    <div>
-                      <h3 className="font-semibold">{row.unit}</h3>
-                      <p className="text-sm text-clinical-slate">
-                        {row.occupied}/{row.beds} band, navbatda {row.waiting}
-                      </p>
+            {loading ? (
+              <div className="px-4 py-8 text-center text-sm text-clinical-slate">Kasalxona o'rinlari backenddan yuklanmoqda.</div>
+            ) : beds.length ? (
+              beds.map((row) => {
+                const percent = row.beds ? Math.min(100, Math.round((row.occupied / row.beds) * 100)) : 0;
+                return (
+                  <div key={row.unit} className="px-4 py-4">
+                    <div className="flex items-center justify-between gap-3">
+                      <div>
+                        <h3 className="font-semibold">{row.unit}</h3>
+                        <p className="text-sm text-clinical-slate">
+                          {row.occupied}/{row.beds} band, navbatda {row.waiting}, kritik {row.critical}
+                        </p>
+                      </div>
+                      <span className="text-sm font-semibold">{percent}%</span>
                     </div>
-                    <span className="text-sm font-semibold">{percent}%</span>
+                    <div className="mt-3 h-2 rounded-sm bg-slate-100">
+                      <div className="h-2 rounded-sm bg-clinical-blue" style={{ width: `${percent}%` }} />
+                    </div>
                   </div>
-                  <div className="mt-3 h-2 rounded-sm bg-slate-100">
-                    <div className="h-2 rounded-sm bg-clinical-blue" style={{ width: `${percent}%` }} />
-                  </div>
-                </div>
-              );
-            })}
+                );
+              })
+            ) : (
+              <div className="px-4 py-8 text-center text-sm text-clinical-slate">Backendda xona yoki o'rin ma'lumoti topilmadi.</div>
+            )}
           </div>
         </section>
 
@@ -2189,7 +2910,10 @@ function HospitalView({ module }: { module: CrmModuleKey }) {
             <h2 className="font-semibold text-clinical-ink">Yotqizish navbati</h2>
           </div>
           <div className="divide-y divide-clinical-line">
-            {queue.map((row) => (
+            {loading ? (
+              <div className="px-4 py-8 text-center text-sm text-clinical-slate">Yotqizish navbati yuklanmoqda.</div>
+            ) : queue.length ? (
+              queue.map((row) => (
               <div key={row.patient} className="px-4 py-3">
                 <div className="flex items-start justify-between gap-3">
                   <div>
@@ -2206,7 +2930,7 @@ function HospitalView({ module }: { module: CrmModuleKey }) {
                   <div className="flex gap-1">
                     <button
                       type="button"
-                      onClick={() => updateAdmissionStatus(row.id, "Navbat")}
+                      onClick={() => void updateAdmissionStatus(row, "waitlist")}
                       className="flex h-8 w-8 items-center justify-center rounded-md border border-clinical-line text-clinical-slate hover:border-clinical-blue hover:text-clinical-blue"
                       title="Navbat"
                     >
@@ -2214,7 +2938,7 @@ function HospitalView({ module }: { module: CrmModuleKey }) {
                     </button>
                     <button
                       type="button"
-                      onClick={() => updateAdmissionStatus(row.id, "Yotqizildi")}
+                      onClick={() => void updateAdmissionStatus(row, "admit")}
                       className="flex h-8 w-8 items-center justify-center rounded-md border border-clinical-line text-clinical-slate hover:border-clinical-green hover:text-clinical-green"
                       title="Yotqizildi"
                     >
@@ -2222,7 +2946,7 @@ function HospitalView({ module }: { module: CrmModuleKey }) {
                     </button>
                     <button
                       type="button"
-                      onClick={() => updateAdmissionStatus(row.id, "Ko'chirildi")}
+                      onClick={() => void updateAdmissionStatus(row, "transfer")}
                       className="flex h-8 w-8 items-center justify-center rounded-md border border-clinical-line text-clinical-slate hover:border-clinical-blue hover:text-clinical-blue"
                       title="Ko'chirildi"
                     >
@@ -2230,16 +2954,19 @@ function HospitalView({ module }: { module: CrmModuleKey }) {
                     </button>
                     <button
                       type="button"
-                      onClick={() => updateAdmissionStatus(row.id, "Chiqarildi")}
+                      onClick={() => void updateAdmissionStatus(row, row.backendStatus === "REQUESTED" || row.backendStatus === "WAITLISTED" ? "cancel" : "discharge")}
                       className="flex h-8 w-8 items-center justify-center rounded-md border border-clinical-line text-clinical-slate hover:border-clinical-red hover:text-clinical-red"
-                      title="Chiqarildi"
+                      title={row.backendStatus === "REQUESTED" || row.backendStatus === "WAITLISTED" ? "Bekor" : "Chiqarildi"}
                     >
                       <XCircle className="h-4 w-4" />
                     </button>
                   </div>
                 </div>
               </div>
-            ))}
+              ))
+            ) : (
+              <div className="px-4 py-8 text-center text-sm text-clinical-slate">Backendda yotqizish navbati topilmadi.</div>
+            )}
           </div>
         </section>
       </div>
@@ -2248,14 +2975,59 @@ function HospitalView({ module }: { module: CrmModuleKey }) {
 }
 
 function DocumentsView({ query }: { query: string }) {
-  const filtered = documents.filter((row) => !query || normalizeText(`${row.title} ${row.patient} ${row.type}`).includes(normalizeText(query)));
-  return <SimpleTable title="Hujjatlar" subtitle="Ambulator karta, xulosa, yo'llanma va shablonlar" rows={filtered} columns={["title", "patient", "type", "owner", "updatedAt", "status"]} />;
+  const [rows, setRows] = useState<DocumentRow[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [message, setMessage] = useState("");
+
+  useEffect(() => {
+    let active = true;
+    setLoading(true);
+    listMedicalRecords()
+      .then((response) => {
+        if (!active) {
+          return;
+        }
+        setRows(response.results.map(medicalRecordDocumentRow));
+        setMessage("");
+      })
+      .catch((error) => {
+        if (!active) {
+          return;
+        }
+        setRows([]);
+        setMessage(error instanceof Error ? error.message : "Medical records could not be loaded.");
+      })
+      .finally(() => {
+        if (active) {
+          setLoading(false);
+        }
+      });
+
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  const filtered = rows.filter((row) => !query || normalizeText(`${row.title} ${row.patient} ${row.type} ${row.owner}`).includes(normalizeText(query)));
+  return (
+    <ReadonlyTable
+      title="Hujjatlar"
+      subtitle="Ambulator karta, xulosa, yo'llanma va shablonlar"
+      rows={filtered}
+      columns={["title", "patient", "type", "owner", "updatedAt", "status"]}
+      loading={loading}
+      message={message}
+      emptyLabel="Backendda tibbiy hujjat topilmadi."
+    />
+  );
 }
 
-function PrescriptionsView({ query }: { query: string }) {
-  const [items, setItems] = useState<PrescriptionRow[]>(prescriptions);
+function PrescriptionsView({ query, currentUserName }: { query: string; currentUserName: string }) {
+  const [items, setItems] = useState<PrescriptionRow[]>([]);
+  const [availablePatients, setAvailablePatients] = useState<RegistryPatient[]>([]);
+  const [loading, setLoading] = useState(true);
   const [draft, setDraft] = useState({
-    patient: "",
+    patientId: 0,
     medication: "",
     dose: "",
     duration: "",
@@ -2263,38 +3035,101 @@ function PrescriptionsView({ query }: { query: string }) {
   const [message, setMessage] = useState("");
   const filtered = items.filter((row) => !query || normalizeText(`${row.patient} ${row.medication}`).includes(normalizeText(query)));
 
-  const addPrescription = (event: FormEvent<HTMLFormElement>) => {
+  useEffect(() => {
+    let active = true;
+    setLoading(true);
+    Promise.all([listPatients(), listMedicalRecords()])
+      .then(([patientResponse, recordResponse]) => {
+        if (!active) {
+          return;
+        }
+        const mappedPatients = patientResponse.results.map(registryPatientFromBackend);
+        setAvailablePatients(mappedPatients);
+        setItems(recordResponse.results.map(prescriptionRowFromRecord).filter((row): row is PrescriptionRow => Boolean(row)));
+        setDraft((current) => ({
+          ...current,
+          patientId: mappedPatients.some((patient) => patient.id === current.patientId)
+            ? current.patientId
+            : mappedPatients[0]?.id ?? 0,
+        }));
+        setMessage("");
+      })
+      .catch((error) => {
+        if (!active) {
+          return;
+        }
+        setAvailablePatients([]);
+        setItems([]);
+        setMessage(error instanceof Error ? error.message : "Prescription backend data could not be loaded.");
+      })
+      .finally(() => {
+        if (active) {
+          setLoading(false);
+        }
+      });
+
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  const addPrescription = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    if (!draft.patient.trim() || !draft.medication.trim()) {
+    const patient = availablePatients.find((entry) => entry.id === Number(draft.patientId));
+    if (!patient || !draft.medication.trim()) {
       setMessage("Bemor va dori nomi majburiy.");
       return;
     }
-    const prescription: PrescriptionRow = {
-      patient: draft.patient.trim(),
-      medication: draft.medication.trim(),
-      dose: draft.dose.trim() || "Doza kiritilmagan",
-      duration: draft.duration.trim() || "Muddat kiritilmagan",
-      status: "Faol",
-      safety: "AI dori xavfsizligi navbatda",
-    };
-    setItems((current) => [prescription, ...current]);
-    setDraft({ patient: "", medication: "", dose: "", duration: "" });
-    setMessage("Retsept qo'shildi va dori xavfsizligi nazoratiga yuborildi.");
+    try {
+      const record = await createMedicalRecord({
+        patient: patient.id,
+        doctor_id: currentUserName,
+        diagnosis: "Retsept",
+        prescriptions: [draft.medication.trim(), draft.dose.trim(), draft.duration.trim()].filter(Boolean).join("\n"),
+        clinical_notes: "Retsept CRM retseptlar modulidan kiritildi. AI xavfsizlik tekshiruvi shifokor ekraniga ko'rsatilmaydi.",
+        record_type: "FOLLOW_UP",
+        imaging_safety_metadata: {
+          source: "prescriptions_module",
+          medication: draft.medication.trim(),
+          dose: draft.dose.trim(),
+          duration: draft.duration.trim(),
+        },
+      });
+      const row = prescriptionRowFromRecord(record);
+      setItems((current) => (row ? [row, ...current] : current));
+      setDraft((current) => ({ patientId: current.patientId, medication: "", dose: "", duration: "" }));
+      setMessage("Retsept backendda saqlandi va AI dori xavfsizligi nazoratiga yuborildi.");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Retsept backendga saqlanmadi.");
+    }
   };
 
   return (
     <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_360px]">
-      <SimpleTable title="Retseptlar" subtitle="Faol retseptlar va dori xavfsizligi" rows={filtered} columns={["patient", "medication", "dose", "duration", "status", "safety"]} />
+      <ReadonlyTable
+        title="Retseptlar"
+        subtitle="Faol retseptlar va dori xavfsizligi"
+        rows={filtered}
+        columns={["patient", "medication", "dose", "duration", "status", "safety"]}
+        loading={loading}
+        emptyLabel="Backendda retsept yozuvi topilmadi."
+      />
       <form onSubmit={addPrescription} className="rounded-md border border-clinical-line bg-white p-4 shadow-sm">
         <h2 className="font-semibold text-clinical-ink">Yangi retsept</h2>
         <div className="mt-4 space-y-3">
           <label className="block">
             <span className="mb-1 block text-sm text-clinical-slate">Bemor</span>
-            <input
-              value={draft.patient}
-              onChange={(event) => setDraft((current) => ({ ...current, patient: event.target.value }))}
+            <select
+              value={draft.patientId}
+              onChange={(event) => setDraft((current) => ({ ...current, patientId: Number(event.target.value) }))}
               className="h-10 w-full rounded-md border border-clinical-line px-3 text-sm focus:border-clinical-blue"
-            />
+            >
+              {availablePatients.map((patient) => (
+                <option key={patient.id} value={patient.id}>
+                  {patient.fullName}
+                </option>
+              ))}
+            </select>
           </label>
           <label className="block">
             <span className="mb-1 block text-sm text-clinical-slate">Dori nomi</span>
@@ -2336,15 +3171,56 @@ function PrescriptionsView({ query }: { query: string }) {
 }
 
 function TreatmentCourseView({ query }: { query: string }) {
-  const filtered = treatmentCourses.filter((row) => !query || normalizeText(`${row.patient} ${row.diagnosis}`).includes(normalizeText(query)));
+  const [rows, setRows] = useState<TreatmentCourseRow[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [message, setMessage] = useState("");
+
+  useEffect(() => {
+    let active = true;
+    setLoading(true);
+    Promise.all([listMedicalRecords(), listClinicalTasks()])
+      .then(([recordResponse, taskResponse]) => {
+        if (!active) {
+          return;
+        }
+        setRows(treatmentCourseRowsFromBackend(recordResponse.results, taskResponse.results));
+        setMessage("");
+      })
+      .catch((error) => {
+        if (!active) {
+          return;
+        }
+        setRows([]);
+        setMessage(error instanceof Error ? error.message : "Treatment course backend data could not be loaded.");
+      })
+      .finally(() => {
+        if (active) {
+          setLoading(false);
+        }
+      });
+
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  const filtered = rows.filter((row) => !query || normalizeText(`${row.patient} ${row.diagnosis} ${row.nextAction}`).includes(normalizeText(query)));
   return (
     <section className="rounded-md border border-clinical-line bg-white shadow-sm">
       <div className="border-b border-clinical-line px-4 py-3">
         <h2 className="font-semibold text-clinical-ink">Davolash kursi</h2>
         <p className="text-sm text-clinical-slate">Kurs, progress va navbatdagi amal</p>
       </div>
+      {message ? (
+        <div className="border-b border-red-100 bg-red-50 px-4 py-3 text-sm text-red-900">
+          {message}
+        </div>
+      ) : null}
       <div className="divide-y divide-clinical-line">
-        {filtered.map((row) => (
+        {loading ? (
+          <div className="px-4 py-8 text-center text-sm text-clinical-slate">Davolash kurslari backenddan yuklanmoqda.</div>
+        ) : filtered.length ? (
+          filtered.map((row) => (
           <div key={row.patient} className="grid gap-3 px-4 py-4 lg:grid-cols-[1fr_180px_1fr] lg:items-center">
             <div>
               <h3 className="font-semibold">{row.patient}</h3>
@@ -2361,32 +3237,86 @@ function TreatmentCourseView({ query }: { query: string }) {
             </div>
             <p className="text-sm text-clinical-ink">{row.nextAction}</p>
           </div>
-        ))}
+          ))
+        ) : (
+          <div className="px-4 py-8 text-center text-sm text-clinical-slate">Backendda davolash kursi uchun tibbiy yozuv topilmadi.</div>
+        )}
       </div>
     </section>
   );
 }
 
 function PregnantRegistryView({ query }: { query: string }) {
-  const [rows, setRows] = useState(pregnantRegistry);
-  const [selectedId, setSelectedId] = useState(pregnantRegistry[0]?.id ?? 0);
+  const [rows, setRows] = useState<PregnantRegistryRow[]>([]);
+  const [selectedId, setSelectedId] = useState(0);
+  const [loading, setLoading] = useState(true);
+  const [message, setMessage] = useState("");
   const filtered = rows.filter((row) => !query || normalizeText(`${row.patient} ${row.provider} ${row.riskFactors.join(" ")}`).includes(normalizeText(query)));
   const selected = rows.find((row) => row.id === selectedId) ?? filtered[0] ?? rows[0];
-  const updateStatus = (entryId: number, statusValue: PregnantRegistryRow["status"]) => {
-    setRows((current) => current.map((row) => (row.id === entryId ? { ...row, status: statusValue } : row)));
+
+  useEffect(() => {
+    let active = true;
+    setLoading(true);
+    listPerinatalRegistry()
+      .then((response) => {
+        if (!active) {
+          return;
+        }
+        const mappedRows = response.results.map(perinatalRowFromBackend);
+        setRows(mappedRows);
+        setSelectedId((current) => (mappedRows.some((row) => row.id === current) ? current : mappedRows[0]?.id ?? 0));
+        setMessage("");
+      })
+      .catch((error) => {
+        if (!active) {
+          return;
+        }
+        setRows([]);
+        setSelectedId(0);
+        setMessage(error instanceof Error ? error.message : "Perinatal registry could not be loaded.");
+      })
+      .finally(() => {
+        if (active) {
+          setLoading(false);
+        }
+      });
+
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  const replaceEntry = (entry: PerinatalRegistryEntry) => {
+    const row = perinatalRowFromBackend(entry);
+    setRows((current) => current.map((item) => (item.id === row.id ? row : item)));
+    setSelectedId(row.id);
   };
-  const escalateRisk = (entryId: number) => {
-    setRows((current) =>
-      current.map((row) =>
-        row.id === entryId
-          ? {
-              ...row,
-              riskZone: row.riskZone === "Yashil" ? "Sariq" : "Qizil",
-              status: row.riskZone === "Qizil" ? "Yotqizildi" : "Kuzatuv",
-            }
-          : row,
-      ),
-    );
+
+  const updateStatus = async (entryId: number, statusValue: PregnantRegistryRow["status"]) => {
+    try {
+      const entry =
+        statusValue === "Yopildi"
+          ? await closePerinatalEntry(entryId, "CLOSED", "Closed from CRM perinatal registry")
+          : await updatePerinatalEntry(entryId, {
+              status: statusValue === "Kuzatuv" ? "WATCHLIST" : statusValue === "Yotqizildi" ? "HOSPITALIZED" : "ACTIVE",
+            });
+      replaceEntry(entry);
+      setMessage("");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Perinatal status could not be updated.");
+    }
+  };
+  const escalateRisk = async (entryId: number) => {
+    const current = rows.find((row) => row.id === entryId);
+    const risk_level: PerinatalRegistryEntry["risk_level"] =
+      current?.riskZone === "Yashil" ? "MODERATE" : current?.riskZone === "Sariq" ? "HIGH" : "CRITICAL";
+    try {
+      const entry = await updatePerinatalRisk(entryId, { risk_level });
+      replaceEntry(entry);
+      setMessage("");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Perinatal risk could not be escalated.");
+    }
   };
 
   return (
@@ -2395,8 +3325,13 @@ function PregnantRegistryView({ query }: { query: string }) {
         <StatCard label="Perinatal ro'yxat" value={String(rows.length)} icon={Baby} />
         <StatCard label="Qizil zona" value={String(rows.filter((row) => row.riskZone === "Qizil").length)} icon={AlertTriangle} tone="red" />
         <StatCard label="Kuzatuv" value={String(rows.filter((row) => row.status === "Kuzatuv").length)} icon={Activity} tone="amber" />
-        <StatCard label="Bugungi ko'rik" value={String(rows.filter((row) => row.nextVisit === "2026-06-03" || row.nextVisit === "2026-06-04").length)} icon={CalendarDays} tone="green" />
+        <StatCard label="Bugungi ko'rik" value={String(rows.filter((row) => row.nextVisit === formatBackendDate(new Date().toISOString())).length)} icon={CalendarDays} tone="green" />
       </div>
+      {message ? (
+        <div className="rounded-md border border-red-100 bg-red-50 px-4 py-3 text-sm text-red-900">
+          {message}
+        </div>
+      ) : null}
 
       <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_390px]">
         <section className="rounded-md border border-clinical-line bg-white shadow-sm">
@@ -2419,7 +3354,14 @@ function PregnantRegistryView({ query }: { query: string }) {
                 </tr>
               </thead>
               <tbody className="divide-y divide-clinical-line">
-                {filtered.map((row) => (
+                {loading ? (
+                  <tr>
+                    <td colSpan={8} className="px-3 py-8 text-center text-clinical-slate">
+                      Perinatal registr backenddan yuklanmoqda.
+                    </td>
+                  </tr>
+                ) : filtered.length ? (
+                  filtered.map((row) => (
                   <tr key={row.id} className={row.id === selected?.id ? "bg-blue-50/70" : "hover:bg-slate-50"}>
                     <td className="px-3 py-3">
                       <button type="button" onClick={() => setSelectedId(row.id)} className="font-semibold text-clinical-ink hover:text-clinical-blue">
@@ -2441,7 +3383,7 @@ function PregnantRegistryView({ query }: { query: string }) {
                       <div className="flex justify-end gap-1">
                         <button
                           type="button"
-                          onClick={() => escalateRisk(row.id)}
+                          onClick={() => void escalateRisk(row.id)}
                           className="flex h-8 w-8 items-center justify-center rounded-md border border-clinical-line text-clinical-slate hover:border-clinical-red hover:text-clinical-red"
                           title="Xavfni oshirish"
                         >
@@ -2449,7 +3391,7 @@ function PregnantRegistryView({ query }: { query: string }) {
                         </button>
                         <button
                           type="button"
-                          onClick={() => updateStatus(row.id, "Kuzatuv")}
+                          onClick={() => void updateStatus(row.id, "Kuzatuv")}
                           className="flex h-8 w-8 items-center justify-center rounded-md border border-clinical-line text-clinical-slate hover:border-clinical-blue hover:text-clinical-blue"
                           title="Kuzatuv"
                         >
@@ -2457,7 +3399,7 @@ function PregnantRegistryView({ query }: { query: string }) {
                         </button>
                         <button
                           type="button"
-                          onClick={() => updateStatus(row.id, "Yopildi")}
+                          onClick={() => void updateStatus(row.id, "Yopildi")}
                           className="flex h-8 w-8 items-center justify-center rounded-md border border-clinical-line text-clinical-slate hover:border-clinical-green hover:text-clinical-green"
                           title="Yopish"
                         >
@@ -2466,7 +3408,14 @@ function PregnantRegistryView({ query }: { query: string }) {
                       </div>
                     </td>
                   </tr>
-                ))}
+                  ))
+                ) : (
+                  <tr>
+                    <td colSpan={8} className="px-3 py-8 text-center text-clinical-slate">
+                      Backendda perinatal karta topilmadi.
+                    </td>
+                  </tr>
+                )}
               </tbody>
             </table>
           </div>
@@ -2509,32 +3458,74 @@ function PregnantRegistryView({ query }: { query: string }) {
 }
 
 function PatronageView({ query }: { query: string }) {
-  const [rows, setRows] = useState(patronageRows);
+  const [rows, setRows] = useState<PatronageRow[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [message, setMessage] = useState("");
   const filtered = rows.filter((row) => !query || normalizeText(`${row.patient} ${row.territory} ${row.nurse} ${row.visitType}`).includes(normalizeText(query)));
-  const updateVisit = (visitId: number, statusValue: PatronageRow["status"], syncValue: PatronageRow["sync"]) => {
-    setRows((current) =>
-      current.map((row) =>
-        row.id === visitId
-          ? {
-              ...row,
-              status: statusValue,
-              sync: syncValue,
-              lastSync: syncValue === "Serverda" ? "2026-06-04 09:00" : row.lastSync,
-              serverVersion: syncValue === "Serverda" ? row.serverVersion + 1 : row.serverVersion,
-            }
-          : row,
-      ),
-    );
+
+  useEffect(() => {
+    let active = true;
+    setLoading(true);
+    listPatronageVisits()
+      .then((response) => {
+        if (!active) {
+          return;
+        }
+        setRows(response.results.map(patronageRowFromBackend));
+        setMessage("");
+      })
+      .catch((error) => {
+        if (!active) {
+          return;
+        }
+        setRows([]);
+        setMessage(error instanceof Error ? error.message : "Patronage visits could not be loaded.");
+      })
+      .finally(() => {
+        if (active) {
+          setLoading(false);
+        }
+      });
+
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  const replaceVisit = (visit: PatronageVisit) => {
+    const row = patronageRowFromBackend(visit);
+    setRows((current) => current.map((item) => (item.id === row.id ? row : item)));
+  };
+
+  const updateVisit = async (visitId: number, action: "sync" | "resolve" | "complete") => {
+    const current = rows.find((row) => row.id === visitId);
+    try {
+      const visit =
+        action === "sync"
+          ? await syncPatronageVisit(visitId, { synced_from: "crm_patronage_board" }, current?.serverVersion)
+          : action === "resolve"
+            ? await resolvePatronageConflict(visitId, "client")
+            : await completePatronageVisit(visitId, "Completed from CRM patronage board", { completed_from: "crm" });
+      replaceVisit(visit);
+      setMessage("");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Patronage action failed.");
+    }
   };
 
   return (
     <div className="space-y-4">
       <div className="grid gap-3 md:grid-cols-4">
-        <StatCard label="Bugungi tashrif" value={String(rows.filter((row) => row.visitDate === "2026-06-03" || row.visitDate === "2026-06-04").length)} icon={Route} />
+        <StatCard label="Bugungi tashrif" value={String(rows.filter((row) => row.visitDate.startsWith(formatBackendDate(new Date().toISOString()))).length)} icon={Route} />
         <StatCard label="Yuqori ustuvor" value={String(rows.filter((row) => row.priority === "Yuqori").length)} icon={AlertTriangle} tone="red" />
         <StatCard label="Offline navbat" value={String(rows.filter((row) => row.sync === "Navbatda").length)} icon={WifiOff} tone="amber" />
         <StatCard label="Konflikt" value={String(rows.filter((row) => row.sync === "Konflikt").length)} icon={XCircle} tone="red" />
       </div>
+      {message ? (
+        <div className="rounded-md border border-red-100 bg-red-50 px-4 py-3 text-sm text-red-900">
+          {message}
+        </div>
+      ) : null}
       <section className="rounded-md border border-clinical-line bg-white shadow-sm">
         <div className="border-b border-clinical-line px-4 py-3">
           <h2 className="font-semibold text-clinical-ink">Patronaj</h2>
@@ -2554,7 +3545,14 @@ function PatronageView({ query }: { query: string }) {
               </tr>
             </thead>
             <tbody className="divide-y divide-clinical-line">
-              {filtered.map((row) => (
+              {loading ? (
+                <tr>
+                  <td colSpan={7} className="px-3 py-8 text-center text-clinical-slate">
+                    Patronaj tashriflari backenddan yuklanmoqda.
+                  </td>
+                </tr>
+              ) : filtered.length ? (
+                filtered.map((row) => (
                 <tr key={row.id} className="hover:bg-slate-50">
                   <td className="px-3 py-3">
                     <Link href={`/doctor/patient/${row.patientId}`} className="font-semibold text-clinical-ink hover:text-clinical-blue">
@@ -2582,7 +3580,7 @@ function PatronageView({ query }: { query: string }) {
                     <div className="flex justify-end gap-1">
                       <button
                         type="button"
-                        onClick={() => updateVisit(row.id, "Sinxronlandi", "Serverda")}
+                        onClick={() => void updateVisit(row.id, "sync")}
                         className="flex h-8 w-8 items-center justify-center rounded-md border border-clinical-line text-clinical-slate hover:border-clinical-green hover:text-clinical-green"
                         title="Sinxronlash"
                       >
@@ -2590,15 +3588,15 @@ function PatronageView({ query }: { query: string }) {
                       </button>
                       <button
                         type="button"
-                        onClick={() => updateVisit(row.id, "Konflikt", "Konflikt")}
+                        onClick={() => void updateVisit(row.id, "resolve")}
                         className="flex h-8 w-8 items-center justify-center rounded-md border border-clinical-line text-clinical-slate hover:border-clinical-red hover:text-clinical-red"
-                        title="Konflikt"
+                        title="Konfliktni yechish"
                       >
                         <AlertTriangle className="h-4 w-4" />
                       </button>
                       <button
                         type="button"
-                        onClick={() => updateVisit(row.id, "Bajarildi", "Serverda")}
+                        onClick={() => void updateVisit(row.id, "complete")}
                         className="flex h-8 w-8 items-center justify-center rounded-md border border-clinical-line text-clinical-slate hover:border-clinical-blue hover:text-clinical-blue"
                         title="Bajarildi"
                       >
@@ -2607,7 +3605,14 @@ function PatronageView({ query }: { query: string }) {
                     </div>
                   </td>
                 </tr>
-              ))}
+                ))
+              ) : (
+                <tr>
+                  <td colSpan={7} className="px-3 py-8 text-center text-clinical-slate">
+                    Backendda patronaj tashrifi topilmadi.
+                  </td>
+                </tr>
+              )}
             </tbody>
           </table>
         </div>
@@ -2616,11 +3621,63 @@ function PatronageView({ query }: { query: string }) {
   );
 }
 
-function PlanningView({ module }: { module: CrmModuleKey }) {
-  const [tasks, setTasks] = useState(clinicalTasks);
-  const rows = module === "scheduled" ? planningRows.filter((row) => row.status !== "Jarayonda") : planningRows;
-  const updateTaskStatus = (taskId: number, statusValue: (typeof clinicalTasks)[number]["status"]) => {
-    setTasks((current) => current.map((task) => (task.id === taskId ? { ...task, status: statusValue } : task)));
+function PlanningView({ module, query }: { module: CrmModuleKey; query: string }) {
+  const [tasks, setTasks] = useState<ClinicalTaskRow[]>([]);
+  const [referralRows, setReferralRows] = useState<ReferralRow[]>([]);
+  const [planRows, setPlanRows] = useState<PlanningRow[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [message, setMessage] = useState("");
+
+  useEffect(() => {
+    let active = true;
+    setLoading(true);
+    Promise.all([listClinicalTasks(), listReferrals(), listAppointments(), listPatronageVisits()])
+      .then(([taskResponse, referralResponse, appointmentResponse, patronageResponse]) => {
+        if (!active) {
+          return;
+        }
+        setTasks(taskResponse.results.map(clinicalTaskRowFromBackend));
+        setReferralRows(referralResponse.results.map(referralRowFromBackend));
+        setPlanRows(planningRowsFromBackend(appointmentResponse.results, taskResponse.results, patronageResponse.results));
+        setMessage("");
+      })
+      .catch((error) => {
+        if (!active) {
+          return;
+        }
+        setTasks([]);
+        setReferralRows([]);
+        setPlanRows([]);
+        setMessage(error instanceof Error ? error.message : "Planning backend data could not be loaded.");
+      })
+      .finally(() => {
+        if (active) {
+          setLoading(false);
+        }
+      });
+
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  const search = normalizeText(query);
+  const filteredTasks = tasks.filter((task) => !search || normalizeText(`${task.title} ${task.owner} ${task.type}`).includes(search));
+  const filteredReferrals = referralRows.filter((referral) => !search || normalizeText(`${referral.target} ${referral.reason} ${referral.type}`).includes(search));
+  const rows = planRows
+    .filter((row) => (module === "scheduled" ? row.status !== "Jarayonda" : true))
+    .filter((row) => !search || normalizeText(`${row.title} ${row.owner} ${row.department} ${row.status}`).includes(search));
+
+  const updateTaskStatus = async (taskId: number, statusValue: ClinicalTaskRow["status"]) => {
+    try {
+      const task = statusValue === "Bajarildi" ? await completeClinicalTask(taskId, "Completed from CRM planning board") : await startClinicalTask(taskId);
+      const row = clinicalTaskRowFromBackend(task);
+      setTasks((current) => current.map((item) => (item.id === row.id ? row : item)));
+      setPlanRows((current) => current.map((item) => (item.title === row.title && item.owner === row.owner ? { ...item, status: row.status } : item)));
+      setMessage("");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Clinical task action failed.");
+    }
   };
 
   return (
@@ -2628,9 +3685,14 @@ function PlanningView({ module }: { module: CrmModuleKey }) {
       <div className="grid gap-3 md:grid-cols-4">
         <StatCard label="Ochiq vazifa" value={String(tasks.filter((task) => task.status === "Ochiq").length)} icon={ClipboardList} />
         <StatCard label="Jarayonda" value={String(tasks.filter((task) => task.status === "Jarayonda").length)} icon={Activity} tone="amber" />
-        <StatCard label="Yo'llanma" value={String(referrals.filter((referral) => referral.status !== "Bajarildi" && referral.status !== "Bekor").length)} icon={Stethoscope} />
+        <StatCard label="Yo'llanma" value={String(referralRows.filter((referral) => referral.status !== "Bajarildi" && referral.status !== "Bekor").length)} icon={Stethoscope} />
         <StatCard label="Yuqori ustuvor" value={String(tasks.filter((task) => task.priority === "Yuqori").length)} icon={AlertTriangle} tone="red" />
       </div>
+      {message ? (
+        <div className="rounded-md border border-red-100 bg-red-50 px-4 py-3 text-sm text-red-900">
+          {message}
+        </div>
+      ) : null}
 
       <section className="rounded-md border border-clinical-line bg-white shadow-sm">
         <div className="border-b border-clinical-line px-4 py-3">
@@ -2651,18 +3713,23 @@ function PlanningView({ module }: { module: CrmModuleKey }) {
                 </tr>
               </thead>
               <tbody className="divide-y divide-clinical-line">
-                {tasks.map((task) => {
-                  const patient = registryPatients.find((entry) => entry.id === task.patientId);
-                  return (
+                {loading ? (
+                  <tr>
+                    <td colSpan={6} className="px-3 py-8 text-center text-clinical-slate">
+                      Klinik vazifalar backenddan yuklanmoqda.
+                    </td>
+                  </tr>
+                ) : filteredTasks.length ? (
+                  filteredTasks.map((task) => (
                     <tr key={task.id} className="hover:bg-slate-50">
                       <td className="px-3 py-3">
                         <strong className="text-clinical-ink">{task.title}</strong>
                         <span className="mt-1 block text-xs text-clinical-slate">{task.type}</span>
                       </td>
                       <td className="px-3 py-3">
-                        {patient ? (
-                          <Link href={`/doctor/patient/${patient.id}`} className="font-semibold text-clinical-ink hover:text-clinical-blue">
-                            {patient.fullName}
+                        {task.patientId ? (
+                          <Link href={`/doctor/patient/${task.patientId}`} className="font-semibold text-clinical-ink hover:text-clinical-blue">
+                            Bemor #{task.patientId}
                           </Link>
                         ) : (
                           "-"
@@ -2677,7 +3744,7 @@ function PlanningView({ module }: { module: CrmModuleKey }) {
                         <div className="flex justify-end gap-1">
                           <button
                             type="button"
-                            onClick={() => updateTaskStatus(task.id, "Jarayonda")}
+                            onClick={() => void updateTaskStatus(task.id, "Jarayonda")}
                             className="flex h-8 w-8 items-center justify-center rounded-md border border-clinical-line text-clinical-slate hover:border-clinical-blue hover:text-clinical-blue"
                             title="Jarayonda"
                           >
@@ -2685,7 +3752,7 @@ function PlanningView({ module }: { module: CrmModuleKey }) {
                           </button>
                           <button
                             type="button"
-                            onClick={() => updateTaskStatus(task.id, "Bajarildi")}
+                            onClick={() => void updateTaskStatus(task.id, "Bajarildi")}
                             className="flex h-8 w-8 items-center justify-center rounded-md border border-clinical-line text-clinical-slate hover:border-clinical-green hover:text-clinical-green"
                             title="Bajarildi"
                           >
@@ -2694,8 +3761,14 @@ function PlanningView({ module }: { module: CrmModuleKey }) {
                         </div>
                       </td>
                     </tr>
-                  );
-                })}
+                  ))
+                ) : (
+                  <tr>
+                    <td colSpan={6} className="px-3 py-8 text-center text-clinical-slate">
+                      Backendda klinik vazifa topilmadi.
+                    </td>
+                  </tr>
+                )}
               </tbody>
             </table>
           </div>
@@ -2704,7 +3777,10 @@ function PlanningView({ module }: { module: CrmModuleKey }) {
             <div className="rounded-md border border-clinical-line bg-slate-50 p-4">
               <h3 className="font-semibold text-clinical-ink">Yo'llanmalar</h3>
               <div className="mt-3 space-y-3">
-                {referrals.map((referral) => (
+                {loading ? (
+                  <p className="text-sm text-clinical-slate">Yo'llanmalar yuklanmoqda.</p>
+                ) : filteredReferrals.length ? (
+                  filteredReferrals.map((referral) => (
                   <div key={referral.id} className="rounded-md border border-clinical-line bg-white p-3">
                     <div className="flex items-start justify-between gap-3">
                       <div>
@@ -2715,15 +3791,20 @@ function PlanningView({ module }: { module: CrmModuleKey }) {
                     </div>
                     <p className="mt-2 text-xs text-clinical-slate">{referral.status}, {referral.requestedAt}</p>
                   </div>
-                ))}
+                  ))
+                ) : (
+                  <p className="text-sm text-clinical-slate">Backendda faol yo'llanma topilmadi.</p>
+                )}
               </div>
             </div>
 
-            <SimpleTable
+            <ReadonlyTable
               title="Bo'lim rejalari"
               subtitle="Mas'ullar va muddatlar"
               rows={rows}
               columns={["title", "owner", "date", "department", "status"]}
+              loading={loading}
+              emptyLabel="Backendda reja yozuvi topilmadi."
             />
           </div>
         </div>
@@ -2733,25 +3814,74 @@ function PlanningView({ module }: { module: CrmModuleKey }) {
 }
 
 function AnalyticsView() {
-  const red = registryPatients.filter((patient) => patient.riskZone === "RED").length;
-  const yellow = registryPatients.filter((patient) => patient.riskZone === "YELLOW").length;
-  const green = registryPatients.filter((patient) => patient.riskZone === "GREEN").length;
+  const [patients, setPatients] = useState<Patient[]>([]);
+  const [appointmentRows, setAppointmentRows] = useState<BackendAppointment[]>([]);
+  const [records, setRecords] = useState<MedicalRecord[]>([]);
+  const [aiLogs, setAiLogs] = useState<AIErrorLog[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [message, setMessage] = useState("");
+
+  useEffect(() => {
+    let active = true;
+    setLoading(true);
+    Promise.allSettled([listPatients(), listAppointments(), listMedicalRecords(), listAIErrorLogs("")])
+      .then((results) => {
+        if (!active) {
+          return;
+        }
+        const patientResult = results[0];
+        const appointmentResult = results[1];
+        const recordResult = results[2];
+        const logResult = results[3];
+        setPatients(patientResult.status === "fulfilled" ? patientResult.value.results : []);
+        setAppointmentRows(appointmentResult.status === "fulfilled" ? appointmentResult.value.results : []);
+        setRecords(recordResult.status === "fulfilled" ? recordResult.value.results : []);
+        setAiLogs(logResult.status === "fulfilled" ? logResult.value.results : []);
+        const rejected = results.find((result) => result.status === "rejected");
+        setMessage(rejected?.status === "rejected" ? String(rejected.reason instanceof Error ? rejected.reason.message : rejected.reason) : "");
+      })
+      .finally(() => {
+        if (active) {
+          setLoading(false);
+        }
+      });
+
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  const red = patients.filter((patient) => patient.triage_status === "RED").length;
+  const yellow = patients.filter((patient) => patient.triage_status === "YELLOW").length;
+  const green = patients.filter((patient) => patient.triage_status === "GREEN").length;
+  const completedAppointments = appointmentRows.filter((appointment) => appointment.status === "COMPLETED").length;
+  const appointmentCompletion = percentage(completedAppointments, appointmentRows.length);
+  const cardiovascularHigh = patients.filter((patient) => biomarkerNumber(patient, "cardiovascular_risk") >= 10 || patient.severe_chronic_tags.some((tag) => normalizeText(tag).includes("yqtk"))).length;
+  const diabetesMarked = patients.filter((patient) => biomarkerNumber(patient, "diabetes_risk") > 0 || patient.severe_chronic_tags.some((tag) => normalizeText(tag).includes("diabet"))).length;
+  const criticalRecords = records.filter((record) => record.ai_review_status === "CRITICAL" || record.ai_review_status === "NEEDS_REVIEW").length;
+  const analyticsRows: Array<[string, number, string]> = [
+    ["YQTK xavfi", percentage(cardiovascularHigh, patients.length), "bg-clinical-red"],
+    ["Qandli diabet xavfi", percentage(diabetesMarked, patients.length), "bg-clinical-amber"],
+    ["AI ko'rib chiqish signali", percentage(criticalRecords + aiLogs.filter((log) => log.severity === "CRITICAL" || log.severity === "HIGH").length, Math.max(records.length + aiLogs.length, 1)), "bg-clinical-blue"],
+  ];
+
   return (
     <div className="space-y-4">
       <div className="grid gap-3 md:grid-cols-4">
         <StatCard label="Qizil zona" value={String(red)} icon={AlertTriangle} tone="red" />
         <StatCard label="Sariq zona" value={String(yellow)} icon={Activity} tone="amber" />
         <StatCard label="Yashil zona" value={String(green)} icon={CheckCircle2} tone="green" />
-        <StatCard label="Qabul bajarilishi" value="82 %" icon={ClipboardCheck} />
+        <StatCard label="Qabul bajarilishi" value={loading ? "..." : `${appointmentCompletion} %`} icon={ClipboardCheck} />
       </div>
+      {message ? (
+        <div className="rounded-md border border-amber-100 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+          {message}
+        </div>
+      ) : null}
       <section className="rounded-md border border-clinical-line bg-white p-4 shadow-sm">
         <h2 className="font-semibold text-clinical-ink">Tahlil</h2>
         <div className="mt-4 grid gap-4 lg:grid-cols-3">
-          {[
-            ["YQTK xavfi", 68, "bg-clinical-red"],
-            ["Qandli diabet xavfi", 52, "bg-clinical-amber"],
-            ["Onkogematologik so'rovnoma", 28, "bg-clinical-blue"],
-          ].map(([label, value, color]) => (
+          {analyticsRows.map(([label, value, color]) => (
             <div key={label} className="rounded-md border border-clinical-line p-4">
               <div className="mb-2 flex justify-between text-sm">
                 <span className="font-medium text-clinical-ink">{label}</span>
@@ -2769,64 +3899,181 @@ function AnalyticsView() {
 }
 
 function AIAnalyzesView() {
-  const [warnings, setWarnings] = useState<ClinicAIWarning[]>(initialClinicAIWarnings);
-  const [selectedId, setSelectedId] = useState(initialClinicAIWarnings[0]?.id ?? 0);
+  const [warnings, setWarnings] = useState<ClinicAIWarning[]>([]);
+  const [activities, setActivities] = useState<DoctorActivitySignal[]>([]);
+  const [selectedId, setSelectedId] = useState(0);
   const [scanState, setScanState] = useState<"idle" | "done">("idle");
+  const [loading, setLoading] = useState(true);
+  const [message, setMessage] = useState("");
   const selected = warnings.find((warning) => warning.id === selectedId) ?? warnings[0];
-  const headDoctorInbox = warnings.filter((warning) => warning.status !== "Yangi");
+  const headDoctorInbox = warnings.filter((warning) => warning.status === "Head doctorga yuborildi" || warning.status === "Vazifa ochildi");
+  const doctorSummaries = useMemo(() => doctorShortcomingSummaries(warnings), [warnings]);
   const criticalCount = warnings.filter((warning) => warning.severity === "CRITICAL").length;
-  const unsentCount = warnings.filter((warning) => warning.status === "Yangi").length;
+  const openCount = warnings.filter((warning) => warning.status !== "Ko'rildi").length;
   const sentCount = warnings.filter((warning) => warning.status === "Head doctorga yuborildi").length;
+
+  const loadAIAnalyzeData = async (showScanDone = false) => {
+    setLoading(true);
+    const results = await Promise.allSettled([
+      listAIErrorLogs(""),
+      listMedicalRecords(),
+      listAppointments(),
+      listClinicalTasks(),
+      listPatronageVisits(),
+      listPerinatalRegistry(),
+    ]);
+    const logResult = results[0];
+    const recordResult = results[1];
+    const appointmentResult = results[2];
+    const taskResult = results[3];
+    const patronageResult = results[4];
+    const perinatalResult = results[5];
+    const logs = logResult.status === "fulfilled" ? logResult.value.results : [];
+    const records = recordResult.status === "fulfilled" ? recordResult.value.results : [];
+    const appointmentRows = appointmentResult.status === "fulfilled" ? appointmentResult.value.results : [];
+    const taskRows = taskResult.status === "fulfilled" ? taskResult.value.results : [];
+    const patronageRowsList = patronageResult.status === "fulfilled" ? patronageResult.value.results : [];
+    const perinatalRows = perinatalResult.status === "fulfilled" ? perinatalResult.value.results : [];
+    const mappedWarnings = logs.map((log) => aiWarningFromLog(log, records, taskRows));
+    setWarnings(mappedWarnings);
+    setActivities(activitySignalsFromBackend(logs, records, appointmentRows, taskRows, patronageRowsList, perinatalRows));
+    setSelectedId((current) => (mappedWarnings.some((warning) => warning.id === current) ? current : mappedWarnings[0]?.id ?? 0));
+    const rejected = results.find((result) => result.status === "rejected");
+    setMessage(rejected?.status === "rejected" ? String(rejected.reason instanceof Error ? rejected.reason.message : rejected.reason) : "");
+    setScanState(showScanDone ? "done" : "idle");
+    setLoading(false);
+  };
+
+  useEffect(() => {
+    let active = true;
+    setLoading(true);
+    Promise.allSettled([
+      listAIErrorLogs(""),
+      listMedicalRecords(),
+      listAppointments(),
+      listClinicalTasks(),
+      listPatronageVisits(),
+      listPerinatalRegistry(),
+    ])
+      .then((results) => {
+        if (!active) {
+          return;
+        }
+        const logResult = results[0];
+        const recordResult = results[1];
+        const appointmentResult = results[2];
+        const taskResult = results[3];
+        const patronageResult = results[4];
+        const perinatalResult = results[5];
+        const logs = logResult.status === "fulfilled" ? logResult.value.results : [];
+        const records = recordResult.status === "fulfilled" ? recordResult.value.results : [];
+        const appointmentRows = appointmentResult.status === "fulfilled" ? appointmentResult.value.results : [];
+        const taskRows = taskResult.status === "fulfilled" ? taskResult.value.results : [];
+        const patronageRowsList = patronageResult.status === "fulfilled" ? patronageResult.value.results : [];
+        const perinatalRows = perinatalResult.status === "fulfilled" ? perinatalResult.value.results : [];
+        const mappedWarnings = logs.map((log) => aiWarningFromLog(log, records, taskRows));
+        setWarnings(mappedWarnings);
+        setActivities(activitySignalsFromBackend(logs, records, appointmentRows, taskRows, patronageRowsList, perinatalRows));
+        setSelectedId((current) => (mappedWarnings.some((warning) => warning.id === current) ? current : mappedWarnings[0]?.id ?? 0));
+        const rejected = results.find((result) => result.status === "rejected");
+        setMessage(rejected?.status === "rejected" ? String(rejected.reason instanceof Error ? rejected.reason.message : rejected.reason) : "");
+      })
+      .finally(() => {
+        if (active) {
+          setLoading(false);
+        }
+      });
+
+    return () => {
+      active = false;
+    };
+  }, []);
 
   const updateWarning = (warningId: number, patch: Partial<ClinicAIWarning>) => {
     setWarnings((current) => current.map((warning) => (warning.id === warningId ? { ...warning, ...patch } : warning)));
   };
 
-  const sendToHeadDoctor = (warningId: number) => {
-    updateWarning(warningId, {
-      status: "Head doctorga yuborildi",
-      sentAt: new Date().toLocaleString("uz-UZ", { hour12: false }),
-    });
+  const acknowledgeWarning = async (warning: ClinicAIWarning) => {
+    try {
+      await updateAIErrorLog(warning.backendLogId, { reviewed_by_admin: true });
+      updateWarning(warning.id, { status: "Ko'rildi" });
+      setMessage("");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "AI warning could not be acknowledged.");
+    }
+  };
+
+  const sendToHeadDoctor = async (warning: ClinicAIWarning) => {
+    try {
+      await escalateAIErrorLog(warning.backendLogId);
+      updateWarning(warning.id, {
+        status: "Head doctorga yuborildi",
+        sentAt: new Date().toLocaleString("uz-UZ", { hour12: false }),
+      });
+      setMessage("Doctor shortcoming head doctor inboxiga yuborildi.");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "AI warning could not be sent to the head doctor.");
+    }
+  };
+
+  const openTaskFromWarning = async (warning: ClinicAIWarning) => {
+    if (!warning.patientId) {
+      setMessage("Bu AI signal uchun bemor ID topilmadi, klinik vazifa ochilmadi.");
+      return;
+    }
+    try {
+      const task = await createClinicalTask({
+        patient: warning.patientId,
+        task_type: "CARE_PLAN",
+        status: "OPEN",
+        priority: taskPriorityFromWarning(warning.severity),
+        title: `AI safety: ${warning.signal}`,
+        description: `${warning.evidence}\n\nTavsiya: ${warning.recommendedAction}`,
+        due_at: dueAtFromSeverity(warning.severity),
+        metadata: {
+          source: "ai_analyzes_workspace",
+          source_ai_error_log_id: warning.backendLogId,
+          source_medical_record_id: warning.medicalRecordId,
+        },
+      });
+      updateWarning(warning.id, { status: "Vazifa ochildi" });
+      setActivities((current) => [
+        {
+          id: Math.max(...current.map((item) => item.id), 0) + 1,
+          time: formatBackendDateTime(task.created_at),
+          doctor: task.created_by_name || task.assigned_to_name || "AI analyzes",
+          patient: task.patient_name || warning.patient,
+          action: `${task.title}: ${clinicalTaskStatusLabel(task.status)}`,
+          module: "Klinik vazifa",
+          aiSignal: task.description,
+          severity: warningSeverityFromTask(task),
+        },
+        ...current,
+      ]);
+      setMessage("AI signal bo'yicha klinik vazifa backendda ochildi.");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "AI warning task could not be created.");
+    }
   };
 
   const runClinicScan = () => {
-    const nextId = Math.max(...warnings.map((warning) => warning.id), 0) + 1;
-    const activity = initialDoctorActivitySignals[nextId % initialDoctorActivitySignals.length];
-    const warning: ClinicAIWarning = {
-      id: nextId,
-      severity: activity.severity,
-      patient: activity.patient,
-      doctor: activity.doctor,
-      department: activity.module,
-      signal: activity.aiSignal,
-      evidence: `${activity.action}. AI cross-check: ${activity.module} oqimi va bemor risk profili solishtirildi.`,
-      recommendedAction:
-        activity.severity === "CRITICAL"
-          ? "Bosh shifokor tezkor ko'rigi, shoshilinch protokol va mas'ul shifokor javobini talab qilish."
-          : "Mas'ul shifokorga vazifa ochish, muddat va dalil faylini biriktirish.",
-      source: `${activity.module} activity stream`,
-      createdAt: new Date().toLocaleString("uz-UZ", { hour12: false }),
-      status: "Yangi",
-    };
-    setWarnings((current) => [warning, ...current]);
-    setSelectedId(warning.id);
-    setScanState("done");
+    void loadAIAnalyzeData(true);
   };
 
   return (
     <div className="space-y-4">
       <div className="grid gap-3 md:grid-cols-4">
         <StatCard label="AI warnings" value={String(warnings.length)} icon={Bot} />
+        <StatCard label="Flagged doctors" value={String(doctorSummaries.length)} icon={Stethoscope} tone="amber" />
         <StatCard label="Critical" value={String(criticalCount)} icon={AlertTriangle} tone="red" />
-        <StatCard label="Head doctor inbox" value={String(sentCount)} icon={Bell} tone="amber" />
-        <StatCard label="Yangi signal" value={String(unsentCount)} icon={Sparkles} tone="green" />
+        <StatCard label="Head doctor inbox" value={String(sentCount)} icon={Bell} />
       </div>
 
       <section className="rounded-md border border-clinical-line bg-white shadow-sm">
         <div className="flex flex-wrap items-center justify-between gap-3 border-b border-clinical-line px-4 py-3">
           <div>
             <h2 className="font-semibold text-clinical-ink">AI analyzes</h2>
-            <p className="text-sm text-clinical-slate">Doctor activity safety monitor, head doctor escalation, RCA and continuity control</p>
+            <p className="text-sm text-clinical-slate">Doctor shortcomings monitor, head doctor escalation, RCA and continuity control. Ochiq signal: {openCount}</p>
           </div>
           <button
             type="button"
@@ -2834,14 +4081,109 @@ function AIAnalyzesView() {
             className="inline-flex h-9 items-center gap-2 rounded-md bg-clinical-blue px-3 text-sm font-semibold text-white"
           >
             <Sparkles className="h-4 w-4" />
-            Full AI scan
+            Refresh AI scan
           </button>
         </div>
-        {scanState === "done" ? (
-          <div className="border-b border-clinical-line bg-blue-50 px-4 py-2 text-sm text-clinical-blue">
-            AI scan completed. New warning added to review queue.
+        {message ? (
+          <div className="border-b border-amber-100 bg-amber-50 px-4 py-2 text-sm text-amber-900">
+            {message}
           </div>
         ) : null}
+        {scanState === "done" ? (
+          <div className="border-b border-clinical-line bg-blue-50 px-4 py-2 text-sm text-clinical-blue">
+            Backend AI scan refreshed from live safety logs and clinical activity.
+          </div>
+        ) : null}
+
+        <section className="border-b border-clinical-line bg-white">
+          <div className="flex items-center justify-between gap-3 px-4 py-3">
+            <div>
+              <h3 className="text-sm font-semibold text-clinical-ink">Doctor shortcomings register</h3>
+              <p className="text-sm text-clinical-slate">Repeated omissions, unsafe orders, imaging consent gaps and continuity failures by doctor</p>
+            </div>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[980px] text-left text-sm">
+              <thead className="bg-slate-50 text-xs uppercase text-clinical-slate">
+                <tr>
+                  <th className="px-3 py-3">Doctor</th>
+                  <th className="px-3 py-3">Shortcomings</th>
+                  <th className="px-3 py-3">High/Critical</th>
+                  <th className="px-3 py-3">Latest patient</th>
+                  <th className="px-3 py-3">Top pattern</th>
+                  <th className="px-3 py-3 text-right">Action</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-clinical-line">
+                {loading ? (
+                  <tr>
+                    <td colSpan={6} className="px-3 py-8 text-center text-clinical-slate">
+                      Doctor shortcomings backenddan yuklanmoqda.
+                    </td>
+                  </tr>
+                ) : doctorSummaries.length ? (
+                  doctorSummaries.map((summary) => {
+                    const warning = warnings.find((item) => item.id === summary.latestWarningId);
+                    return (
+                      <tr key={summary.doctor} className="hover:bg-slate-50">
+                        <td className="px-3 py-3">
+                          <button
+                            type="button"
+                            onClick={() => setSelectedId(summary.latestWarningId)}
+                            className="font-semibold text-clinical-ink hover:text-clinical-blue"
+                          >
+                            {summary.doctor}
+                          </button>
+                          <p className="mt-1 text-xs text-clinical-slate">{summary.latestAt}</p>
+                        </td>
+                        <td className="px-3 py-3">
+                          <span className="font-semibold text-clinical-ink">{summary.total}</span>
+                          <p className="mt-1 text-xs text-clinical-slate">Ochiq: {summary.open}</p>
+                        </td>
+                        <td className="px-3 py-3">
+                          <span className="rounded-md border border-red-200 bg-red-50 px-2 py-1 text-xs font-semibold text-red-900">
+                            {summary.critical} critical / {summary.high} high
+                          </span>
+                        </td>
+                        <td className="px-3 py-3">
+                          <p className="font-medium text-clinical-ink">{summary.latestPatient}</p>
+                          <p className="mt-1 text-xs text-clinical-slate">{summary.latestSignal}</p>
+                        </td>
+                        <td className="px-3 py-3 text-clinical-slate">{summary.topSource}</td>
+                        <td className="px-3 py-3">
+                          <div className="flex justify-end gap-1">
+                            <button
+                              type="button"
+                              onClick={() => setSelectedId(summary.latestWarningId)}
+                              className="flex h-8 w-8 items-center justify-center rounded-md border border-clinical-line text-clinical-slate hover:border-clinical-blue hover:text-clinical-blue"
+                              title="Ko'rish"
+                            >
+                              <Eye className="h-4 w-4" />
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => warning && void sendToHeadDoctor(warning)}
+                              className="flex h-8 w-8 items-center justify-center rounded-md border border-clinical-line text-clinical-slate hover:border-clinical-red hover:text-clinical-red"
+                              title="Head doctorga yuborish"
+                            >
+                              <Send className="h-4 w-4" />
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })
+                ) : (
+                  <tr>
+                    <td colSpan={6} className="px-3 py-8 text-center text-clinical-slate">
+                      Backendda doctor shortcoming topilmadi.
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </section>
 
         <div className="grid gap-4 p-4 xl:grid-cols-[minmax(0,1fr)_430px]">
           <div className="space-y-4">
@@ -2858,7 +4200,14 @@ function AIAnalyzesView() {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-clinical-line">
-                  {warnings.map((warning) => (
+                  {loading ? (
+                    <tr>
+                      <td colSpan={6} className="px-3 py-8 text-center text-clinical-slate">
+                        Backend AI warnings yuklanmoqda.
+                      </td>
+                    </tr>
+                  ) : warnings.length ? (
+                    warnings.map((warning) => (
                     <tr key={warning.id} className={warning.id === selected?.id ? "bg-blue-50/70" : "hover:bg-slate-50"}>
                       <td className="px-3 py-3">
                         <span className={`rounded-md border px-2 py-1 text-xs font-semibold ${aiWarningSeverityStyles[warning.severity]}`}>
@@ -2897,7 +4246,7 @@ function AIAnalyzesView() {
                           </button>
                           <button
                             type="button"
-                            onClick={() => sendToHeadDoctor(warning.id)}
+                            onClick={() => void sendToHeadDoctor(warning)}
                             className="flex h-8 w-8 items-center justify-center rounded-md border border-clinical-line text-clinical-slate hover:border-clinical-red hover:text-clinical-red"
                             title="Head doctorga yuborish"
                           >
@@ -2905,7 +4254,15 @@ function AIAnalyzesView() {
                           </button>
                           <button
                             type="button"
-                            onClick={() => updateWarning(warning.id, { status: "Vazifa ochildi" })}
+                            onClick={() => void acknowledgeWarning(warning)}
+                            className="flex h-8 w-8 items-center justify-center rounded-md border border-clinical-line text-clinical-slate hover:border-clinical-green hover:text-clinical-green"
+                            title="Ko'rildi"
+                          >
+                            <CheckCircle2 className="h-4 w-4" />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => void openTaskFromWarning(warning)}
                             className="flex h-8 w-8 items-center justify-center rounded-md border border-clinical-line text-clinical-slate hover:border-clinical-green hover:text-clinical-green"
                             title="Vazifa ochish"
                           >
@@ -2914,7 +4271,14 @@ function AIAnalyzesView() {
                         </div>
                       </td>
                     </tr>
-                  ))}
+                    ))
+                  ) : (
+                    <tr>
+                      <td colSpan={6} className="px-3 py-8 text-center text-clinical-slate">
+                        Backendda AI safety warning topilmadi.
+                      </td>
+                    </tr>
+                  )}
                 </tbody>
               </table>
             </div>
@@ -2924,10 +4288,13 @@ function AIAnalyzesView() {
                 <h3 className="font-semibold text-clinical-ink">Doctor activity stream</h3>
               </div>
               <div className="divide-y divide-clinical-line">
-                {initialDoctorActivitySignals.map((activity) => (
+                {loading ? (
+                  <div className="px-4 py-8 text-center text-sm text-clinical-slate">Activity stream backenddan yuklanmoqda.</div>
+                ) : activities.length ? (
+                  activities.map((activity) => (
                   <div key={activity.id} className="grid gap-3 px-4 py-3 md:grid-cols-[150px_1fr_120px] md:items-center">
                     <div>
-                      <p className="text-sm font-semibold text-clinical-ink">{activity.time.slice(11)}</p>
+                      <p className="text-sm font-semibold text-clinical-ink">{activity.time.slice(11, 16)}</p>
                       <p className="text-xs text-clinical-slate">{activity.module}</p>
                     </div>
                     <div>
@@ -2939,7 +4306,10 @@ function AIAnalyzesView() {
                       {activity.severity}
                     </span>
                   </div>
-                ))}
+                  ))
+                ) : (
+                  <div className="px-4 py-8 text-center text-sm text-clinical-slate">Backendda activity topilmadi.</div>
+                )}
               </div>
             </section>
           </div>
@@ -2968,10 +4338,10 @@ function AIAnalyzesView() {
                     <p className="text-xs font-semibold uppercase text-clinical-slate">Recommended action</p>
                     <p className="mt-1 text-sm text-clinical-ink">{selected.recommendedAction}</p>
                   </div>
-                  <div className="grid grid-cols-2 gap-2">
+                  <div className="grid grid-cols-3 gap-2">
                     <button
                       type="button"
-                      onClick={() => sendToHeadDoctor(selected.id)}
+                      onClick={() => void sendToHeadDoctor(selected)}
                       className="inline-flex h-10 items-center justify-center gap-2 rounded-md bg-clinical-red text-sm font-semibold text-white"
                     >
                       <Send className="h-4 w-4" />
@@ -2979,7 +4349,15 @@ function AIAnalyzesView() {
                     </button>
                     <button
                       type="button"
-                      onClick={() => updateWarning(selected.id, { status: "Ko'rildi" })}
+                      onClick={() => void openTaskFromWarning(selected)}
+                      className="inline-flex h-10 items-center justify-center gap-2 rounded-md bg-clinical-blue text-sm font-semibold text-white"
+                    >
+                      <ClipboardList className="h-4 w-4" />
+                      Vazifa
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => void acknowledgeWarning(selected)}
                       className="inline-flex h-10 items-center justify-center gap-2 rounded-md border border-clinical-line bg-white text-sm font-semibold text-clinical-ink"
                     >
                       <CheckCircle2 className="h-4 w-4" />
@@ -3051,94 +4429,33 @@ function SettingsView() {
   );
 }
 
-function SimpleTable<T extends object>({
+function ReadonlyTable<T extends object>({
   title,
   subtitle,
   rows,
   columns,
+  loading = false,
+  message = "",
+  emptyLabel = "Backendda yozuv topilmadi.",
 }: {
   title: string;
   subtitle: string;
   rows: T[];
   columns: Array<keyof T>;
+  loading?: boolean;
+  message?: string;
+  emptyLabel?: string;
 }) {
-  const blankDraft = () =>
-    columns.reduce<Record<string, string>>((draft, column) => {
-      draft[String(column)] = "";
-      return draft;
-    }, {});
-  const [createdRows, setCreatedRows] = useState<T[]>([]);
-  const [createOpen, setCreateOpen] = useState(false);
-  const [draft, setDraft] = useState<Record<string, string>>(blankDraft);
   const [selectedRow, setSelectedRow] = useState<T | null>(null);
-  const [message, setMessage] = useState("");
-  const displayRows = [...createdRows, ...rows];
-
-  const addRow = (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    const hasValue = columns.some((column) => draft[String(column)]?.trim());
-    if (!hasValue) {
-      setMessage("Kamida bitta maydon to'ldirilsin.");
-      return;
-    }
-    const row = columns.reduce<Record<string, string>>((nextRow, column) => {
-      nextRow[String(column)] = draft[String(column)]?.trim() || "-";
-      return nextRow;
-    }, {}) as T;
-    setCreatedRows((current) => [row, ...current]);
-    setSelectedRow(row);
-    setDraft(blankDraft());
-    setMessage("Yangi yozuv qo'shildi.");
-    setCreateOpen(false);
-  };
 
   return (
     <section className="min-w-0 rounded-md border border-clinical-line bg-white shadow-sm">
-      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-clinical-line px-4 py-3">
-        <div>
-          <h2 className="font-semibold text-clinical-ink">{title}</h2>
-          <p className="text-sm text-clinical-slate">{subtitle}</p>
-        </div>
-        <button
-          type="button"
-          onClick={() => {
-            setCreateOpen((open) => !open);
-            setMessage("");
-          }}
-          className="inline-flex h-9 items-center gap-2 rounded-md bg-clinical-blue px-3 text-sm font-semibold text-white"
-        >
-          <Plus className="h-4 w-4" />
-          Qo'shish
-        </button>
+      <div className="border-b border-clinical-line px-4 py-3">
+        <h2 className="font-semibold text-clinical-ink">{title}</h2>
+        <p className="text-sm text-clinical-slate">{subtitle}</p>
       </div>
-      {createOpen ? (
-        <form onSubmit={addRow} className="grid gap-3 border-b border-clinical-line bg-slate-50 px-4 py-4 md:grid-cols-2 xl:grid-cols-3">
-          {columns.map((column) => (
-            <label key={String(column)} className="block">
-              <span className="mb-1 block text-sm text-clinical-slate">{String(column)}</span>
-              <input
-                value={draft[String(column)] ?? ""}
-                onChange={(event) => setDraft((current) => ({ ...current, [String(column)]: event.target.value }))}
-                className="h-10 w-full rounded-md border border-clinical-line bg-white px-3 text-sm focus:border-clinical-blue"
-              />
-            </label>
-          ))}
-          <div className="flex items-end gap-2">
-            <button type="submit" className="h-10 rounded-md bg-clinical-blue px-3 text-sm font-semibold text-white">
-              Saqlash
-            </button>
-            <button
-              type="button"
-              onClick={() => setCreateOpen(false)}
-              className="h-10 rounded-md border border-clinical-line bg-white px-3 text-sm font-semibold text-clinical-slate"
-            >
-              Bekor
-            </button>
-          </div>
-        </form>
-      ) : null}
       {message ? (
-        <div className="border-b border-clinical-line bg-blue-50 px-4 py-2 text-sm text-clinical-blue">
+        <div className="border-b border-red-100 bg-red-50 px-4 py-3 text-sm text-red-900">
           {message}
         </div>
       ) : null}
@@ -3174,44 +4491,41 @@ function SimpleTable<T extends object>({
             </tr>
           </thead>
           <tbody className="divide-y divide-clinical-line">
-            {displayRows.map((row, index) => (
-              <tr key={index} className="hover:bg-slate-50">
-                {columns.map((column) => (
-                  <td key={String(column)} className="px-3 py-3">
-                    {String(row[column] ?? "")}
-                  </td>
-                ))}
-                <td className="px-3 py-3">
-                  <div className="flex justify-end gap-1">
-                    <button
-                      type="button"
-                      onClick={() => setSelectedRow(row)}
-                      className="flex h-8 w-8 items-center justify-center rounded-md border border-clinical-line text-clinical-slate hover:border-clinical-blue hover:text-clinical-blue"
-                      title="Ko'rish"
-                    >
-                      <Eye className="h-4 w-4" />
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setDraft(
-                          columns.reduce<Record<string, string>>((nextDraft, column) => {
-                            nextDraft[String(column)] = String(row[column] ?? "");
-                            return nextDraft;
-                          }, {}),
-                        );
-                        setCreateOpen(true);
-                        setSelectedRow(row);
-                      }}
-                      className="flex h-8 w-8 items-center justify-center rounded-md border border-clinical-line text-clinical-slate hover:border-clinical-blue hover:text-clinical-blue"
-                      title="Tahrirlash nusxasi"
-                    >
-                      <Edit3 className="h-4 w-4" />
-                    </button>
-                  </div>
+            {loading ? (
+              <tr>
+                <td colSpan={columns.length + 1} className="px-3 py-8 text-center text-clinical-slate">
+                  Backenddan yuklanmoqda.
                 </td>
               </tr>
-            ))}
+            ) : rows.length ? (
+              rows.map((row, index) => (
+                <tr key={index} className="hover:bg-slate-50">
+                  {columns.map((column) => (
+                    <td key={String(column)} className="px-3 py-3">
+                      {String(row[column] ?? "")}
+                    </td>
+                  ))}
+                  <td className="px-3 py-3">
+                    <div className="flex justify-end">
+                      <button
+                        type="button"
+                        onClick={() => setSelectedRow(row)}
+                        className="flex h-8 w-8 items-center justify-center rounded-md border border-clinical-line text-clinical-slate hover:border-clinical-blue hover:text-clinical-blue"
+                        title="Ko'rish"
+                      >
+                        <Eye className="h-4 w-4" />
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              ))
+            ) : (
+              <tr>
+                <td colSpan={columns.length + 1} className="px-3 py-8 text-center text-clinical-slate">
+                  {emptyLabel}
+                </td>
+              </tr>
+            )}
           </tbody>
         </table>
       </div>

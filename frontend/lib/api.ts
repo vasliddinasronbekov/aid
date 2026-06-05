@@ -115,6 +115,58 @@ export interface PatientPayload {
   consent_preferences?: Record<string, unknown>;
 }
 
+export interface Hospital {
+  id: number;
+  public_id: string;
+  organization: number | null;
+  organization_name: string;
+  code: string;
+  name: string;
+  facility_type: "PRIMARY_CARE" | "DISTRICT" | "REGIONAL" | "SPECIALTY" | "MOBILE_CLINIC" | string;
+  address_line: string;
+  city: string;
+  region_code: string;
+  phone_number: string;
+  timezone: string;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface Department {
+  id: number;
+  public_id: string;
+  organization: number | null;
+  organization_name: string;
+  hospital: number;
+  hospital_name: string;
+  code: string;
+  name: string;
+  specialty: string;
+  floor: string;
+  phone_number: string;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface Room {
+  id: number;
+  public_id: string;
+  organization: number | null;
+  hospital: number;
+  hospital_name: string;
+  department: number;
+  department_name: string;
+  room_number: string;
+  room_qr_id: string;
+  care_level: "GENERAL" | "OBSERVATION" | "HIGH_DEPENDENCY" | "ICU" | "MATERNITY" | "PEDIATRIC" | string;
+  bed_count: number;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
 export type BackendAppointmentStatus = "SCHEDULED" | "CHECKED_IN" | "IN_PROGRESS" | "COMPLETED" | "CANCELLED" | "NO_SHOW";
 export type BackendAppointmentPriority = "ROUTINE" | "SOON" | "URGENT" | "CRITICAL";
 export type BackendAppointmentType =
@@ -338,6 +390,332 @@ export interface MedicalRecord {
   ai_error_logs?: AIErrorLog[];
 }
 
+export interface Encounter {
+  id: number;
+  public_id: string;
+  organization: number | null;
+  hospital: number | null;
+  hospital_name: string;
+  department_ref: number | null;
+  department_name: string;
+  room: number | null;
+  room_label: string;
+  patient: number;
+  patient_name: string;
+  appointment: number | null;
+  provider: number | null;
+  provider_name: string;
+  encounter_type: "OUTPATIENT" | "INPATIENT" | "EMERGENCY" | "HOME_VISIT" | "TELEHEALTH" | "PERINATAL";
+  status: "OPEN" | "SIGNED" | "AMENDED" | "CANCELLED";
+  started_at: string;
+  ended_at: string | null;
+  chief_complaint: string;
+  assessment: string;
+  plan: string;
+  follow_up_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface PatientVitalRecord {
+  id: number;
+  public_id: string;
+  patient: number;
+  patient_name: string;
+  encounter: number | null;
+  organization: number | null;
+  hospital: number | null;
+  recorded_by: number | null;
+  recorded_by_name: string;
+  measured_at: string;
+  systolic_bp: number | null;
+  diastolic_bp: number | null;
+  heart_rate: number | null;
+  respiratory_rate: number | null;
+  oxygen_saturation: string | null;
+  temperature_c: string | null;
+  glucose_mmol_l: string | null;
+  weight_kg: string | null;
+  height_cm: string | null;
+  pain_score: number | null;
+  notes: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface PatientAllergyRecord {
+  id: number;
+  public_id: string;
+  patient: number;
+  patient_name: string;
+  organization: number | null;
+  hospital: number | null;
+  recorded_by: number | null;
+  recorded_by_name: string;
+  allergen: string;
+  reaction: string;
+  severity: "LOW" | "MODERATE" | "HIGH" | "LIFE_THREATENING";
+  status: "ACTIVE" | "INACTIVE" | "ENTERED_IN_ERROR";
+  onset_date: string | null;
+  notes: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CareTeamMembership {
+  id: number;
+  public_id: string;
+  patient: number;
+  patient_name: string;
+  staff_profile: number;
+  staff_name: string;
+  organization: number | null;
+  organization_name: string;
+  hospital: number | null;
+  hospital_name: string;
+  role: "PRIMARY_PHYSICIAN" | "NURSE" | "SPECIALIST" | "CARE_COORDINATOR" | "REGISTRAR" | "SOCIAL_WORKER" | "OTHER";
+  starts_at: string;
+  ends_at: string | null;
+  is_primary: boolean;
+  is_active: boolean;
+  notes: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ClinicalTask {
+  id: number;
+  public_id: string;
+  organization: number | null;
+  hospital: number | null;
+  hospital_name: string;
+  department_ref: number | null;
+  department_name: string;
+  patient: number | null;
+  patient_name: string;
+  encounter: number | null;
+  appointment: number | null;
+  assigned_to: number | null;
+  assigned_to_name: string;
+  created_by: number | null;
+  created_by_name: string;
+  task_type: "FOLLOW_UP" | "MEDICATION_REVIEW" | "LAB_REVIEW" | "IMAGING_REVIEW" | "DISCHARGE_PREP" | "PATRONAGE_VISIT" | "CARE_PLAN" | "ADMIN";
+  status: "OPEN" | "IN_PROGRESS" | "BLOCKED" | "COMPLETED" | "CANCELLED";
+  priority: "LOW" | "ROUTINE" | "SOON" | "URGENT" | "CRITICAL";
+  title: string;
+  description: string;
+  due_at: string | null;
+  started_at: string | null;
+  completed_at: string | null;
+  cancelled_at: string | null;
+  completion_note: string;
+  idempotency_key: string;
+  metadata: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ClinicalTaskPayload {
+  patient: number;
+  assigned_to?: number | null;
+  task_type: ClinicalTask["task_type"];
+  status?: ClinicalTask["status"];
+  priority: ClinicalTask["priority"];
+  title: string;
+  description: string;
+  due_at?: string | null;
+  metadata?: Record<string, unknown>;
+}
+
+export interface Referral {
+  id: number;
+  public_id: string;
+  organization: number | null;
+  hospital: number | null;
+  patient: number;
+  patient_name: string;
+  encounter: number | null;
+  source_department: number | null;
+  source_department_name: string;
+  target_hospital: number | null;
+  target_hospital_name: string;
+  target_department: number | null;
+  target_department_name: string;
+  requested_by: number | null;
+  requested_by_name: string;
+  assigned_to: number | null;
+  assigned_to_name: string;
+  referral_type: "SPECIALIST" | "HOSPITAL_TRANSFER" | "IMAGING" | "LAB" | "SOCIAL_SUPPORT" | "EXTERNAL";
+  status: "DRAFT" | "REQUESTED" | "ACCEPTED" | "SCHEDULED" | "COMPLETED" | "CANCELLED";
+  priority: "ROUTINE" | "SOON" | "URGENT" | "CRITICAL";
+  reason: string;
+  clinical_summary: string;
+  requested_at: string;
+  accepted_at: string | null;
+  completed_at: string | null;
+  cancelled_at: string | null;
+  cancellation_reason: string;
+  external_reference: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface DiagnosticOrder {
+  id: number;
+  public_id: string;
+  organization: number | null;
+  hospital: number | null;
+  hospital_name: string;
+  department_ref: number | null;
+  department_name: string;
+  patient: number;
+  patient_name: string;
+  encounter: number | null;
+  ordered_by: number | null;
+  ordered_by_name: string;
+  order_type: "LAB" | "IMAGING" | "PROCEDURE" | "ECG" | "OTHER";
+  status: "ORDERED" | "COLLECTED" | "IN_PROGRESS" | "RESULTED" | "CANCELLED";
+  priority: "ROUTINE" | "SOON" | "URGENT" | "STAT";
+  code: string;
+  name: string;
+  indication: string;
+  specimen: string;
+  scheduled_at: string | null;
+  collected_at: string | null;
+  resulted_at: string | null;
+  result_summary: string;
+  result_payload: Record<string, unknown>;
+  cancellation_reason: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface Admission {
+  id: number;
+  public_id: string;
+  organization: number | null;
+  hospital: number | null;
+  hospital_name: string;
+  patient: number;
+  patient_name: string;
+  patient_triage_status: TriageStatus;
+  encounter: number | null;
+  referral: number | null;
+  requested_by: number | null;
+  requested_by_name: string;
+  admitting_provider: number | null;
+  admitting_provider_name: string;
+  department_ref: number | null;
+  department_name: string;
+  room: number | null;
+  room_label: string;
+  source: "RECEPTION" | "EMERGENCY" | "APPOINTMENT" | "REFERRAL" | "TRANSFER";
+  status: "REQUESTED" | "WAITLISTED" | "ADMITTED" | "TRANSFERRED" | "DISCHARGED" | "CANCELLED";
+  priority: "ROUTINE" | "URGENT" | "CRITICAL";
+  reason: string;
+  requested_at: string;
+  waitlisted_at: string | null;
+  admitted_at: string | null;
+  transferred_at: string | null;
+  discharged_at: string | null;
+  cancelled_at: string | null;
+  discharge_summary: string;
+  cancellation_reason: string;
+  triage_snapshot: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface PerinatalRegistryEntry {
+  id: number;
+  public_id: string;
+  patient: number;
+  patient_name: string;
+  patient_phone: string;
+  organization: number | null;
+  hospital: number | null;
+  hospital_name: string;
+  department_ref: number | null;
+  department_name: string;
+  assigned_provider: number | null;
+  assigned_provider_name: string;
+  status: "ACTIVE" | "WATCHLIST" | "HOSPITALIZED" | "DELIVERED" | "CLOSED";
+  risk_level: "LOW" | "MODERATE" | "HIGH" | "CRITICAL";
+  gestational_age_weeks: number;
+  gestational_age_days: number;
+  gravida: number;
+  para: number;
+  last_menstrual_period: string | null;
+  estimated_due_date: string | null;
+  enrollment_reason: string;
+  risk_factors: string[];
+  latest_systolic_bp: number | null;
+  latest_diastolic_bp: number | null;
+  latest_glucose_mmol_l: string | null;
+  fetal_notes: string;
+  next_visit_at: string | null;
+  enrolled_at: string;
+  closed_at: string | null;
+  outcome_notes: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface PatronageVisit {
+  id: number;
+  public_id: string;
+  organization: number | null;
+  hospital: number | null;
+  hospital_name: string;
+  patient: number;
+  patient_name: string;
+  assigned_to: number | null;
+  assigned_to_name: string;
+  created_by: number | null;
+  created_by_name: string;
+  visit_type: "ROUTINE" | "HIGH_RISK" | "POST_DISCHARGE" | "PERINATAL" | "CHRONIC" | "NEWBORN";
+  status: "PLANNED" | "OFFLINE_QUEUED" | "SYNCED" | "CONFLICT" | "COMPLETED" | "CANCELLED";
+  priority: ClinicalTask["priority"];
+  territory: string;
+  scheduled_for: string;
+  visited_at: string | null;
+  synced_at: string | null;
+  client_reference: string;
+  idempotency_key: string;
+  client_updated_at: string | null;
+  server_version: number;
+  payload: Record<string, unknown>;
+  conflict_payload: Record<string, unknown>;
+  conflict_reason: string;
+  notes: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface PatientDuplicateCandidate {
+  id: number;
+  public_id: string;
+  organization: number | null;
+  hospital: number | null;
+  hospital_name: string;
+  primary_patient: number;
+  primary_patient_name: string;
+  primary_medical_record_number: string;
+  duplicate_patient: number;
+  duplicate_patient_name: string;
+  duplicate_medical_record_number: string;
+  score: string;
+  match_reasons: string[];
+  status: "NEEDS_REVIEW" | "CONFIRMED" | "DISMISSED" | "MERGED";
+  detected_at: string;
+  reviewed_by: number | null;
+  reviewed_by_name: string;
+  reviewed_at: string | null;
+  review_note: string;
+  created_at: string;
+  updated_at: string;
+}
+
 function cookieValue(name: string) {
   if (typeof document === "undefined") {
     return "";
@@ -350,44 +728,42 @@ function cookieValue(name: string) {
   return cookie ? decodeURIComponent(cookie.slice(encodedName.length)) : "";
 }
 
-let csrfCookieRequest: Promise<void> | null = null;
+let csrfToken = "";
+let csrfCookieRequest: Promise<string> | null = null;
 
-async function ensureCsrfCookie() {
-  if (typeof document === "undefined" || cookieValue("csrftoken")) {
-    return;
+async function ensureCsrfCookie(forceRefresh = false) {
+  if (typeof document === "undefined") {
+    return "";
+  }
+  const cookieToken = cookieValue("csrftoken");
+  if (!forceRefresh && (csrfToken || cookieToken)) {
+    return csrfToken || cookieToken;
   }
 
   csrfCookieRequest ??= fetch(`${API_BASE_URL}/csrf/`, {
     credentials: "include",
-  }).then((response) => {
+  }).then(async (response) => {
     if (!response.ok) {
       throw new Error(`CSRF setup failed with ${response.status}`);
     }
+
+    const payload = (await response.json().catch(() => ({}))) as { csrfToken?: string; csrf_token?: string };
+    const token = payload.csrfToken || payload.csrf_token || cookieValue("csrftoken");
+    if (!token) {
+      throw new Error("CSRF setup did not return a token.");
+    }
+    csrfToken = token;
+    return token;
   });
 
   try {
-    await csrfCookieRequest;
+    return await csrfCookieRequest;
   } finally {
     csrfCookieRequest = null;
   }
 }
 
-export async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
-  const method = (init?.method ?? "GET").toUpperCase();
-  const unsafeMethod = !["GET", "HEAD", "OPTIONS", "TRACE"].includes(method);
-  const headers = new Headers(init?.headers);
-  if (init?.body && !headers.has("Content-Type")) {
-    headers.set("Content-Type", "application/json");
-  }
-
-  if (unsafeMethod) {
-    await ensureCsrfCookie();
-    const token = cookieValue("csrftoken");
-    if (token && !headers.has("X-CSRFToken")) {
-      headers.set("X-CSRFToken", token);
-    }
-  }
-
+async function apiFetchOnce<T>(path: string, init: RequestInit | undefined, headers: Headers): Promise<T> {
   const response = await fetch(`${API_BASE_URL}${path}`, {
     ...init,
     credentials: init?.credentials ?? "include",
@@ -400,6 +776,38 @@ export async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> 
   }
 
   return response.json() as Promise<T>;
+}
+
+export async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
+  const method = (init?.method ?? "GET").toUpperCase();
+  const unsafeMethod = !["GET", "HEAD", "OPTIONS", "TRACE"].includes(method);
+  const headers = new Headers(init?.headers);
+  if (init?.body && !headers.has("Content-Type")) {
+    headers.set("Content-Type", "application/json");
+  }
+
+  if (unsafeMethod) {
+    const token = await ensureCsrfCookie();
+    if (token && !headers.has("X-CSRFToken")) {
+      headers.set("X-CSRFToken", token);
+    }
+  }
+
+  try {
+    return await apiFetchOnce<T>(path, init, headers);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "";
+    if (!unsafeMethod || !message.includes("CSRF")) {
+      throw error;
+    }
+    csrfToken = "";
+    const retryHeaders = new Headers(headers);
+    const retryToken = await ensureCsrfCookie(true);
+    if (retryToken) {
+      retryHeaders.set("X-CSRFToken", retryToken);
+    }
+    return apiFetchOnce<T>(path, init, retryHeaders);
+  }
 }
 
 export function getCurrentUser() {
@@ -432,11 +840,30 @@ export function listPatients(query = "") {
   return apiFetch<PaginatedResponse<Patient>>(`/patients/${suffix}`);
 }
 
+export function getPatient(patientId: number) {
+  return apiFetch<Patient>(`/patients/${patientId}/`);
+}
+
 export function createPatient(payload: PatientPayload) {
   return apiFetch<Patient>("/patients/", {
     method: "POST",
     body: JSON.stringify(payload),
   });
+}
+
+export function listHospitals(query = "") {
+  const suffix = query ? `?${query}` : "";
+  return apiFetch<PaginatedResponse<Hospital>>(`/hospitals/${suffix}`);
+}
+
+export function listDepartments(query = "") {
+  const suffix = query ? `?${query}` : "";
+  return apiFetch<PaginatedResponse<Department>>(`/departments/${suffix}`);
+}
+
+export function listRooms(query = "") {
+  const suffix = query ? `?${query}` : "";
+  return apiFetch<PaginatedResponse<Room>>(`/rooms/${suffix}`);
 }
 
 export function listAppointments(query = "") {
@@ -483,6 +910,241 @@ export function createMedicalRecord(payload: MedicalRecordPayload) {
   return apiFetch<MedicalRecord>("/medical-records/", {
     method: "POST",
     body: JSON.stringify(payload),
+  });
+}
+
+export function listMedicalRecords(query = "") {
+  const suffix = query ? `?${query}` : "";
+  return apiFetch<PaginatedResponse<MedicalRecord>>(`/medical-records/${suffix}`);
+}
+
+export function listEncounters(query = "") {
+  const suffix = query ? `?${query}` : "";
+  return apiFetch<PaginatedResponse<Encounter>>(`/encounters/${suffix}`);
+}
+
+export function listPatientVitals(query = "") {
+  const suffix = query ? `?${query}` : "";
+  return apiFetch<PaginatedResponse<PatientVitalRecord>>(`/patient-vitals/${suffix}`);
+}
+
+export function listPatientAllergies(query = "") {
+  const suffix = query ? `?${query}` : "";
+  return apiFetch<PaginatedResponse<PatientAllergyRecord>>(`/patient-allergies/${suffix}`);
+}
+
+export function listCareTeamMemberships(query = "") {
+  const suffix = query ? `?${query}` : "";
+  return apiFetch<PaginatedResponse<CareTeamMembership>>(`/care-team-memberships/${suffix}`);
+}
+
+export function listClinicalTasks(query = "") {
+  const suffix = query ? `?${query}` : "";
+  return apiFetch<PaginatedResponse<ClinicalTask>>(`/clinical-tasks/${suffix}`);
+}
+
+export function createClinicalTask(payload: ClinicalTaskPayload) {
+  return apiFetch<ClinicalTask>("/clinical-tasks/", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function startClinicalTask(taskId: number) {
+  return apiFetch<ClinicalTask>(`/clinical-tasks/${taskId}/start/`, {
+    method: "POST",
+    body: JSON.stringify({}),
+  });
+}
+
+export function completeClinicalTask(taskId: number, completionNote = "") {
+  return apiFetch<ClinicalTask>(`/clinical-tasks/${taskId}/complete/`, {
+    method: "POST",
+    body: JSON.stringify({ completion_note: completionNote }),
+  });
+}
+
+export function cancelClinicalTask(taskId: number, completionNote = "") {
+  return apiFetch<ClinicalTask>(`/clinical-tasks/${taskId}/cancel/`, {
+    method: "POST",
+    body: JSON.stringify({ completion_note: completionNote }),
+  });
+}
+
+export function listReferrals(query = "") {
+  const suffix = query ? `?${query}` : "";
+  return apiFetch<PaginatedResponse<Referral>>(`/referrals/${suffix}`);
+}
+
+export function acceptReferral(referralId: number) {
+  return apiFetch<Referral>(`/referrals/${referralId}/accept/`, {
+    method: "POST",
+    body: JSON.stringify({}),
+  });
+}
+
+export function completeReferral(referralId: number, clinicalSummary = "") {
+  return apiFetch<Referral>(`/referrals/${referralId}/complete/`, {
+    method: "POST",
+    body: JSON.stringify({ clinical_summary: clinicalSummary }),
+  });
+}
+
+export function cancelReferral(referralId: number, cancellationReason = "") {
+  return apiFetch<Referral>(`/referrals/${referralId}/cancel/`, {
+    method: "POST",
+    body: JSON.stringify({ cancellation_reason: cancellationReason }),
+  });
+}
+
+export function listDiagnosticOrders(query = "") {
+  const suffix = query ? `?${query}` : "";
+  return apiFetch<PaginatedResponse<DiagnosticOrder>>(`/diagnostic-orders/${suffix}`);
+}
+
+export function collectDiagnosticOrder(orderId: number) {
+  return apiFetch<DiagnosticOrder>(`/diagnostic-orders/${orderId}/collect/`, {
+    method: "POST",
+    body: JSON.stringify({}),
+  });
+}
+
+export function resultDiagnosticOrder(orderId: number, resultSummary = "", resultPayload: Record<string, unknown> = {}) {
+  return apiFetch<DiagnosticOrder>(`/diagnostic-orders/${orderId}/result/`, {
+    method: "POST",
+    body: JSON.stringify({ result_summary: resultSummary, result_payload: resultPayload }),
+  });
+}
+
+export function cancelDiagnosticOrder(orderId: number, cancellationReason = "") {
+  return apiFetch<DiagnosticOrder>(`/diagnostic-orders/${orderId}/cancel/`, {
+    method: "POST",
+    body: JSON.stringify({ cancellation_reason: cancellationReason }),
+  });
+}
+
+export function listAdmissions(query = "") {
+  const suffix = query ? `?${query}` : "";
+  return apiFetch<PaginatedResponse<Admission>>(`/admissions/${suffix}`);
+}
+
+export function waitlistAdmission(admissionId: number) {
+  return apiFetch<Admission>(`/admissions/${admissionId}/waitlist/`, {
+    method: "POST",
+    body: JSON.stringify({}),
+  });
+}
+
+export function admitAdmission(admissionId: number) {
+  return apiFetch<Admission>(`/admissions/${admissionId}/admit/`, {
+    method: "POST",
+    body: JSON.stringify({}),
+  });
+}
+
+export function transferAdmission(admissionId: number, payload: { room?: number; department_ref?: number }) {
+  return apiFetch<Admission>(`/admissions/${admissionId}/transfer/`, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function dischargeAdmission(admissionId: number, dischargeSummary = "") {
+  return apiFetch<Admission>(`/admissions/${admissionId}/discharge/`, {
+    method: "POST",
+    body: JSON.stringify({ discharge_summary: dischargeSummary }),
+  });
+}
+
+export function cancelAdmission(admissionId: number, cancellationReason = "") {
+  return apiFetch<Admission>(`/admissions/${admissionId}/cancel/`, {
+    method: "POST",
+    body: JSON.stringify({ cancellation_reason: cancellationReason }),
+  });
+}
+
+export function listPerinatalRegistry(query = "") {
+  const suffix = query ? `?${query}` : "";
+  return apiFetch<PaginatedResponse<PerinatalRegistryEntry>>(`/perinatal-registry/${suffix}`);
+}
+
+export function updatePerinatalRisk(entryId: number, payload: Partial<Pick<PerinatalRegistryEntry, "risk_level" | "risk_factors" | "fetal_notes" | "latest_systolic_bp" | "latest_diastolic_bp" | "latest_glucose_mmol_l">>) {
+  return apiFetch<PerinatalRegistryEntry>(`/perinatal-registry/${entryId}/update-risk/`, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function updatePerinatalEntry(entryId: number, payload: Partial<Pick<PerinatalRegistryEntry, "status" | "next_visit_at" | "enrollment_reason" | "outcome_notes">>) {
+  return apiFetch<PerinatalRegistryEntry>(`/perinatal-registry/${entryId}/`, {
+    method: "PATCH",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function closePerinatalEntry(entryId: number, status: "CLOSED" | "DELIVERED" = "CLOSED", outcomeNotes = "") {
+  return apiFetch<PerinatalRegistryEntry>(`/perinatal-registry/${entryId}/close/`, {
+    method: "POST",
+    body: JSON.stringify({ status, outcome_notes: outcomeNotes }),
+  });
+}
+
+export function listPatronageVisits(query = "") {
+  const suffix = query ? `?${query}` : "";
+  return apiFetch<PaginatedResponse<PatronageVisit>>(`/patronage-visits/${suffix}`);
+}
+
+export function syncPatronageVisit(visitId: number, payload: Record<string, unknown> = {}, serverVersion?: number) {
+  return apiFetch<PatronageVisit>(`/patronage-visits/${visitId}/sync/`, {
+    method: "POST",
+    body: JSON.stringify({ payload, server_version: serverVersion }),
+  });
+}
+
+export function completePatronageVisit(visitId: number, notes = "", payload: Record<string, unknown> = {}) {
+  return apiFetch<PatronageVisit>(`/patronage-visits/${visitId}/complete/`, {
+    method: "POST",
+    body: JSON.stringify({ notes, payload }),
+  });
+}
+
+export function cancelPatronageVisit(visitId: number, notes = "") {
+  return apiFetch<PatronageVisit>(`/patronage-visits/${visitId}/cancel/`, {
+    method: "POST",
+    body: JSON.stringify({ notes }),
+  });
+}
+
+export function resolvePatronageConflict(visitId: number, strategy: "client" | "server" = "client") {
+  return apiFetch<PatronageVisit>(`/patronage-visits/${visitId}/resolve-conflict/`, {
+    method: "POST",
+    body: JSON.stringify({ strategy }),
+  });
+}
+
+export function listPatientDuplicateCandidates(query = "") {
+  const suffix = query ? `?${query}` : "";
+  return apiFetch<PaginatedResponse<PatientDuplicateCandidate>>(`/patient-duplicate-candidates/${suffix}`);
+}
+
+export function confirmDuplicateCandidate(candidateId: number, reviewNote = "") {
+  return apiFetch<PatientDuplicateCandidate>(`/patient-duplicate-candidates/${candidateId}/confirm/`, {
+    method: "POST",
+    body: JSON.stringify({ review_note: reviewNote }),
+  });
+}
+
+export function dismissDuplicateCandidate(candidateId: number, reviewNote = "") {
+  return apiFetch<PatientDuplicateCandidate>(`/patient-duplicate-candidates/${candidateId}/dismiss/`, {
+    method: "POST",
+    body: JSON.stringify({ review_note: reviewNote }),
+  });
+}
+
+export function markMergedDuplicateCandidate(candidateId: number, reviewNote = "") {
+  return apiFetch<PatientDuplicateCandidate>(`/patient-duplicate-candidates/${candidateId}/mark-merged/`, {
+    method: "POST",
+    body: JSON.stringify({ review_note: reviewNote }),
   });
 }
 
@@ -541,6 +1203,13 @@ export function updateAIErrorLog(logId: number, payload: Partial<Pick<AIErrorLog
   return apiFetch<AIErrorLog>(`/ai-error-logs/${logId}/`, {
     method: "PATCH",
     body: JSON.stringify(payload),
+  });
+}
+
+export function escalateAIErrorLog(logId: number) {
+  return apiFetch<AIErrorLog>(`/ai-error-logs/${logId}/escalate/`, {
+    method: "POST",
+    body: JSON.stringify({}),
   });
 }
 

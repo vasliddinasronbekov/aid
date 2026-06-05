@@ -27,15 +27,72 @@ import {
   ClinicalTaskRow,
   DiagnosticOrderRow,
   DuplicateCandidateRow,
-  patientProfileFor,
+  PatientDocument,
   PatientAllergy,
   PatientEncounter,
   PatientVital,
   PatronageRow,
   PregnantRegistryRow,
+  PrescriptionRow,
   ReferralRow,
   RegistryPatient,
 } from "@/lib/crm-data";
+import {
+  acceptReferral,
+  admitAdmission,
+  cancelAppointment,
+  cancelClinicalTask,
+  cancelDiagnosticOrder,
+  cancelReferral,
+  closePerinatalEntry,
+  collectDiagnosticOrder,
+  completeAppointment,
+  completeClinicalTask,
+  completePatronageVisit,
+  completeReferral,
+  confirmDuplicateCandidate,
+  createMedicalRecord,
+  dischargeAdmission,
+  dismissDuplicateCandidate,
+  getCurrentUser,
+  getPatient,
+  listAdmissions,
+  listAppointments,
+  listCareTeamMemberships,
+  listClinicalTasks,
+  listDiagnosticOrders,
+  listEncounters,
+  listMedicalRecords,
+  listPatronageVisits,
+  listPatientAllergies,
+  listPatientDuplicateCandidates,
+  listPatientVitals,
+  listPerinatalRegistry,
+  listReferrals,
+  markMergedDuplicateCandidate,
+  resultDiagnosticOrder,
+  startAppointment,
+  startClinicalTask,
+  syncPatronageVisit,
+  updatePerinatalRisk,
+  waitlistAdmission,
+} from "@/lib/api";
+import type {
+  Admission,
+  BackendAppointment,
+  CareTeamMembership,
+  ClinicalTask,
+  DiagnosticOrder,
+  Encounter,
+  MedicalRecord,
+  Patient,
+  PatientAllergyRecord,
+  PatientDuplicateCandidate,
+  PatientVitalRecord,
+  PatronageVisit,
+  PerinatalRegistryEntry,
+  Referral,
+} from "@/lib/api";
 
 type PatientTab =
   | "profile"
@@ -104,59 +161,615 @@ interface PatientProfileProps {
   patientId: number;
 }
 
+interface PatientProfileData {
+  patient: RegistryPatient;
+  appointments: Appointment[];
+  encounters: PatientEncounter[];
+  vitals: PatientVital[];
+  allergies: PatientAllergy[];
+  prescriptions: PrescriptionRow[];
+  documents: PatientDocument[];
+  careTeam: CareTeamMember[];
+  tasks: ClinicalTaskRow[];
+  referrals: ReferralRow[];
+  diagnosticOrders: DiagnosticOrderRow[];
+  admissions: AdmissionRow[];
+  perinatalEntries: PregnantRegistryRow[];
+  patronageVisits: PatronageRow[];
+  duplicateCandidates: DuplicateCandidateRow[];
+}
+
+function formatDate(value?: string | null) {
+  if (!value) {
+    return "";
+  }
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return value.slice(0, 10);
+  }
+  return date.toISOString().slice(0, 10);
+}
+
+function formatDateTime(value?: string | null) {
+  if (!value) {
+    return "";
+  }
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return value;
+  }
+  return `${date.toISOString().slice(0, 10)} ${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
+}
+
+function ageFromDateOfBirth(value?: string | null) {
+  if (!value) {
+    return 0;
+  }
+  const birthDate = new Date(value);
+  if (Number.isNaN(birthDate.getTime())) {
+    return 0;
+  }
+  const today = new Date();
+  let age = today.getFullYear() - birthDate.getFullYear();
+  const monthDelta = today.getMonth() - birthDate.getMonth();
+  if (monthDelta < 0 || (monthDelta === 0 && today.getDate() < birthDate.getDate())) {
+    age -= 1;
+  }
+  return Math.max(age, 0);
+}
+
+function biomarkerText(patient: Patient, key: string, fallback = "") {
+  const value = patient.chronic_biomarkers?.[key];
+  if (Array.isArray(value)) {
+    return value.join(", ");
+  }
+  if (typeof value === "number" || typeof value === "boolean") {
+    return String(value);
+  }
+  if (typeof value === "string") {
+    return value;
+  }
+  return fallback;
+}
+
+function patientToRegistry(patient: Patient): RegistryPatient {
+  const healthGroup = biomarkerText(patient, "health_group", "Yo'q");
+  const normalizedHealthGroup =
+    healthGroup === "I" || healthGroup === "II" || healthGroup === "III" || healthGroup === "Yo'q" ? healthGroup : "Yo'q";
+  const clinicalDiagnosis =
+    biomarkerText(patient, "primary_diagnosis") ||
+    patient.severe_chronic_tags.join(", ") ||
+    patient.department ||
+    "Klinik tashxis kiritilmagan";
+
+  return {
+    id: patient.id,
+    medicalCard: patient.medical_record_number || patient.patient_identifier,
+    fullName: patient.display_name,
+    territory: patient.district || patient.region_code,
+    age: ageFromDateOfBirth(patient.date_of_birth),
+    healthGroup: normalizedHealthGroup,
+    cardiovascularRisk: biomarkerText(patient, "cardiovascular_risk", ""),
+    diabetesRisk: biomarkerText(patient, "diabetes_risk", ""),
+    oncologySurvey: biomarkerText(patient, "oncology_survey") === "done" ? "O'tilgan" : "O'tilmagan",
+    dList: biomarkerText(patient, "d_list", "Yo'q"),
+    disability: biomarkerText(patient, "disability", "Yo'q"),
+    clinicalDiagnosis,
+    phone: patient.phone_number,
+    address: patient.address_line,
+    lastVisit: formatDate(patient.updated_at),
+    nextVisit: biomarkerText(patient, "next_visit_at", ""),
+    assignedDoctor: patient.department_name || patient.department || "Belgilanmagan",
+    patronageNurse: biomarkerText(patient, "patronage_nurse", "Belgilanmagan"),
+    riskZone: patient.triage_status,
+    tags: [patient.triage_status, ...patient.severe_chronic_tags].filter(Boolean),
+  };
+}
+
+function appointmentStatus(status: BackendAppointment["status"]): Appointment["status"] {
+  if (status === "COMPLETED") {
+    return "Bajarildi";
+  }
+  if (status === "CANCELLED" || status === "NO_SHOW") {
+    return "Bekor qilingan";
+  }
+  return "Aktiv";
+}
+
+function appointmentPriority(priority: BackendAppointment["priority"]): Appointment["priority"] {
+  if (priority === "URGENT" || priority === "CRITICAL") {
+    return "Yuqori";
+  }
+  if (priority === "SOON") {
+    return "O'rta";
+  }
+  return "Past";
+}
+
+function appointmentToRow(appointment: BackendAppointment): Appointment {
+  const scheduled = new Date(appointment.scheduled_start);
+  const validDate = !Number.isNaN(scheduled.getTime());
+  return {
+    id: appointment.id,
+    patientId: appointment.patient,
+    date: validDate ? scheduled.toISOString().slice(0, 10) : appointment.scheduled_start.slice(0, 10),
+    time: validDate
+      ? `${String(scheduled.getHours()).padStart(2, "0")}:${String(scheduled.getMinutes()).padStart(2, "0")}`
+      : appointment.scheduled_start.slice(11, 16),
+    patient: appointment.patient_name,
+    department: appointment.department_name || appointment.appointment_type,
+    doctor: appointment.provider_name || appointment.created_by_name,
+    status: appointmentStatus(appointment.status),
+    priority: appointmentPriority(appointment.priority),
+    reason: appointment.reason,
+    room: appointment.room_label || "",
+    notes: appointment.notes,
+  };
+}
+
+function encounterToRow(encounter: Encounter): PatientEncounter {
+  const status: PatientEncounter["status"] =
+    encounter.status === "SIGNED" ? "Imzolangan" : encounter.status === "CANCELLED" ? "Bekor qilingan" : "Ochiq";
+  const type: PatientEncounter["type"] =
+    encounter.encounter_type === "HOME_VISIT"
+      ? "Patronaj"
+      : encounter.encounter_type === "PERINATAL"
+        ? "Perinatal"
+        : encounter.encounter_type === "EMERGENCY"
+          ? "Shoshilinch"
+          : "Ambulator";
+  return {
+    id: encounter.id,
+    patientId: encounter.patient,
+    date: formatDateTime(encounter.started_at),
+    provider: encounter.provider_name || "Belgilanmagan",
+    type,
+    status,
+    complaint: encounter.chief_complaint,
+    assessment: encounter.assessment,
+    plan: encounter.plan,
+  };
+}
+
+function vitalToRow(vital: PatientVitalRecord): PatientVital {
+  return {
+    id: vital.id,
+    patientId: vital.patient,
+    measuredAt: formatDateTime(vital.measured_at),
+    bp: vital.systolic_bp && vital.diastolic_bp ? `${vital.systolic_bp}/${vital.diastolic_bp}` : "",
+    pulse: vital.heart_rate ?? 0,
+    spo2: vital.oxygen_saturation ? Number(vital.oxygen_saturation) : 0,
+    temperature: vital.temperature_c ? Number(vital.temperature_c) : 0,
+    glucose: vital.glucose_mmol_l ? `${vital.glucose_mmol_l} mmol/L` : "",
+    weight: vital.weight_kg ? `${vital.weight_kg} kg` : "",
+    note: vital.notes,
+  };
+}
+
+function allergyToRow(allergy: PatientAllergyRecord): PatientAllergy {
+  const severity: PatientAllergy["severity"] =
+    allergy.severity === "LOW"
+      ? "Past"
+      : allergy.severity === "MODERATE"
+        ? "O'rta"
+        : allergy.severity === "HIGH"
+          ? "Yuqori"
+          : "Hayot uchun xavfli";
+  return {
+    id: allergy.id,
+    patientId: allergy.patient,
+    allergen: allergy.allergen,
+    reaction: allergy.reaction || allergy.notes,
+    severity,
+    status: allergy.status === "ACTIVE" ? "Faol" : "Faol emas",
+    onset: formatDate(allergy.onset_date),
+  };
+}
+
+function careTeamToRow(member: CareTeamMembership): CareTeamMember {
+  const roleLabels: Record<CareTeamMembership["role"], string> = {
+    PRIMARY_PHYSICIAN: "Asosiy shifokor",
+    NURSE: "Hamshira",
+    SPECIALIST: "Mutaxassis",
+    CARE_COORDINATOR: "Care coordinator",
+    REGISTRAR: "Registrator",
+    SOCIAL_WORKER: "Ijtimoiy xodim",
+    OTHER: "Boshqa",
+  };
+  return {
+    id: member.id,
+    patientId: member.patient,
+    name: member.staff_name,
+    role: roleLabels[member.role],
+    department: member.hospital_name,
+    phone: member.notes,
+    primary: member.is_primary,
+  };
+}
+
+function taskPriority(priority: ClinicalTask["priority"]): ClinicalTaskRow["priority"] {
+  if (priority === "URGENT" || priority === "CRITICAL") {
+    return "Yuqori";
+  }
+  if (priority === "SOON" || priority === "ROUTINE") {
+    return "O'rta";
+  }
+  return "Past";
+}
+
+function taskStatus(status: ClinicalTask["status"]): ClinicalTaskRow["status"] {
+  if (status === "IN_PROGRESS" || status === "BLOCKED") {
+    return "Jarayonda";
+  }
+  if (status === "COMPLETED") {
+    return "Bajarildi";
+  }
+  if (status === "CANCELLED") {
+    return "Bekor";
+  }
+  return "Ochiq";
+}
+
+function taskToRow(task: ClinicalTask): ClinicalTaskRow {
+  return {
+    id: task.id,
+    patientId: task.patient ?? 0,
+    title: task.title,
+    owner: task.assigned_to_name || task.created_by_name,
+    type: task.task_type,
+    dueAt: formatDateTime(task.due_at),
+    priority: taskPriority(task.priority),
+    status: taskStatus(task.status),
+  };
+}
+
+function referralToRow(referral: Referral): ReferralRow {
+  const status: ReferralRow["status"] =
+    referral.status === "ACCEPTED"
+      ? "Qabul qilindi"
+      : referral.status === "SCHEDULED"
+        ? "Rejalashtirildi"
+        : referral.status === "COMPLETED"
+          ? "Bajarildi"
+          : referral.status === "CANCELLED"
+            ? "Bekor"
+            : "So'rov";
+  return {
+    id: referral.id,
+    patientId: referral.patient,
+    target: referral.target_department_name || referral.target_hospital_name || referral.referral_type,
+    type: referral.referral_type,
+    requestedAt: formatDateTime(referral.requested_at),
+    priority: appointmentPriority(referral.priority),
+    status,
+    reason: referral.reason,
+  };
+}
+
+function orderToRow(order: DiagnosticOrder): DiagnosticOrderRow {
+  const type: DiagnosticOrderRow["type"] =
+    order.order_type === "LAB"
+      ? "Laboratoriya"
+      : order.order_type === "IMAGING"
+        ? "Tasvirlash"
+        : order.order_type === "ECG"
+          ? "EKG"
+          : "Protsedura";
+  const status: DiagnosticOrderRow["status"] =
+    order.status === "COLLECTED"
+      ? "Olingan"
+      : order.status === "IN_PROGRESS"
+        ? "Jarayonda"
+        : order.status === "RESULTED"
+          ? "Natija tayyor"
+          : order.status === "CANCELLED"
+            ? "Bekor"
+            : "Buyurildi";
+  const priority: DiagnosticOrderRow["priority"] =
+    order.priority === "STAT"
+      ? "Shoshilinch"
+      : order.priority === "URGENT"
+        ? "Yuqori"
+        : order.priority === "SOON"
+          ? "O'rta"
+          : "Past";
+  return {
+    id: order.id,
+    patientId: order.patient,
+    name: order.name,
+    type,
+    orderedAt: formatDateTime(order.created_at),
+    priority,
+    status,
+    result: order.result_summary,
+  };
+}
+
+function admissionToRow(admission: Admission): AdmissionRow {
+  const status: AdmissionRow["status"] =
+    admission.status === "WAITLISTED"
+      ? "Navbat"
+      : admission.status === "ADMITTED"
+        ? "Yotqizildi"
+        : admission.status === "TRANSFERRED"
+          ? "Ko'chirildi"
+          : admission.status === "DISCHARGED"
+            ? "Chiqarildi"
+            : admission.status === "CANCELLED"
+              ? "Bekor"
+              : "So'rov";
+  const priority: AdmissionRow["priority"] =
+    admission.priority === "CRITICAL" ? "Kritik" : admission.priority === "URGENT" ? "Shoshilinch" : "Rejali";
+  const triage: AdmissionRow["triage"] =
+    admission.patient_triage_status === "RED" ? "Qizil" : admission.patient_triage_status === "YELLOW" ? "Sariq" : "Yashil";
+  return {
+    id: admission.id,
+    patientId: admission.patient,
+    patient: admission.patient_name,
+    department: admission.department_name || admission.source,
+    room: admission.room_label,
+    triage,
+    requestedAt: formatDateTime(admission.requested_at),
+    status,
+    priority,
+    reason: admission.reason,
+    assignedTo: admission.admitting_provider_name || admission.requested_by_name,
+  };
+}
+
+function perinatalToRow(entry: PerinatalRegistryEntry): PregnantRegistryRow {
+  const riskZone: PregnantRegistryRow["riskZone"] =
+    entry.risk_level === "CRITICAL" || entry.risk_level === "HIGH" ? "Qizil" : entry.risk_level === "MODERATE" ? "Sariq" : "Yashil";
+  const status: PregnantRegistryRow["status"] =
+    entry.status === "WATCHLIST"
+      ? "Kuzatuv"
+      : entry.status === "HOSPITALIZED"
+        ? "Yotqizildi"
+        : entry.status === "DELIVERED"
+          ? "Tug'ruq"
+          : entry.status === "CLOSED"
+            ? "Yopildi"
+            : "Faol";
+  return {
+    id: entry.id,
+    patientId: entry.patient,
+    patient: entry.patient_name,
+    week: entry.gestational_age_weeks,
+    day: entry.gestational_age_days,
+    riskZone,
+    bp: entry.latest_systolic_bp && entry.latest_diastolic_bp ? `${entry.latest_systolic_bp}/${entry.latest_diastolic_bp}` : "",
+    gravida: entry.gravida,
+    para: entry.para,
+    edd: formatDate(entry.estimated_due_date),
+    lastScreening: formatDateTime(entry.enrolled_at),
+    nextVisit: formatDateTime(entry.next_visit_at),
+    status,
+    provider: entry.assigned_provider_name,
+    riskFactors: entry.risk_factors,
+    fetalNote: entry.fetal_notes,
+  };
+}
+
+function patronageToRow(visit: PatronageVisit): PatronageRow {
+  const visitType: PatronageRow["visitType"] =
+    visit.visit_type === "HIGH_RISK"
+      ? "Yuqori xavf"
+      : visit.visit_type === "PERINATAL"
+        ? "Perinatal"
+        : visit.visit_type === "POST_DISCHARGE"
+          ? "Chiqarilgandan keyin"
+          : visit.visit_type === "CHRONIC"
+            ? "Surunkali"
+            : "Rejali";
+  const sync: PatronageRow["sync"] =
+    visit.status === "CONFLICT" ? "Konflikt" : visit.status === "OFFLINE_QUEUED" ? "Navbatda" : "Serverda";
+  const status: PatronageRow["status"] =
+    visit.status === "OFFLINE_QUEUED"
+      ? "Offline navbat"
+      : visit.status === "SYNCED"
+        ? "Sinxronlandi"
+        : visit.status === "CONFLICT"
+          ? "Konflikt"
+          : visit.status === "COMPLETED"
+            ? "Bajarildi"
+            : visit.status === "CANCELLED"
+              ? "Bekor"
+              : "Rejada";
+  return {
+    id: visit.id,
+    patientId: visit.patient,
+    patient: visit.patient_name,
+    territory: visit.territory,
+    nurse: visit.assigned_to_name || visit.created_by_name,
+    visitType,
+    visitDate: formatDateTime(visit.scheduled_for),
+    priority: taskPriority(visit.priority),
+    sync,
+    status,
+    offlineId: visit.client_reference || visit.idempotency_key,
+    lastSync: formatDateTime(visit.synced_at),
+    serverVersion: visit.server_version,
+    notes: visit.notes,
+  };
+}
+
+function duplicateToRow(candidate: PatientDuplicateCandidate): DuplicateCandidateRow {
+  return {
+    id: candidate.id,
+    primaryPatientId: candidate.primary_patient,
+    duplicatePatientId: candidate.duplicate_patient,
+    primaryPatient: candidate.primary_patient_name,
+    duplicatePatient: candidate.duplicate_patient_name,
+    score: Number(candidate.score),
+    reasons: candidate.match_reasons,
+    status:
+      candidate.status === "CONFIRMED"
+        ? "Tasdiqlandi"
+        : candidate.status === "DISMISSED"
+          ? "Rad etildi"
+          : candidate.status === "MERGED"
+            ? "Birlashtirildi"
+            : "Ko'rib chiqiladi",
+    detectedAt: formatDateTime(candidate.detected_at),
+  };
+}
+
+function prescriptionRows(records: MedicalRecord[]): PrescriptionRow[] {
+  return records
+    .filter((record) => record.prescriptions.trim())
+    .map((record) => ({
+      patient: record.patient_name,
+      medication: record.diagnosis,
+      dose: record.prescriptions,
+      duration: formatDate(record.created_at),
+      status: record.discharge_status,
+      safety: record.ai_review_status ?? "Hidden",
+    }));
+}
+
+function documentRows(records: MedicalRecord[]): PatientDocument[] {
+  return records.map((record) => ({
+    id: record.id,
+    patientId: record.patient,
+    title: `${record.record_type} - ${record.diagnosis}`,
+    type: record.record_type,
+    owner: record.doctor_id,
+    updatedAt: formatDateTime(record.updated_at),
+    status: record.discharge_status,
+  }));
+}
+
 export function PatientProfile({ patientId }: PatientProfileProps) {
-  const profile = patientProfileFor(patientId);
   const [activeTab, setActiveTab] = useState<PatientTab>("profile");
-  const [appointments, setAppointments] = useState<Appointment[]>(profile?.appointments ?? []);
-  const [tasks, setTasks] = useState<ClinicalTaskRow[]>(profile?.tasks ?? []);
-  const [orders, setOrders] = useState<DiagnosticOrderRow[]>(profile?.diagnosticOrders ?? []);
-  const [referrals, setReferrals] = useState<ReferralRow[]>(profile?.referrals ?? []);
-  const [admissions, setAdmissions] = useState<AdmissionRow[]>(profile?.admissions ?? []);
-  const [perinatalEntries, setPerinatalEntries] = useState<PregnantRegistryRow[]>(profile?.perinatalEntries ?? []);
-  const [patronageVisits, setPatronageVisits] = useState<PatronageRow[]>(profile?.patronageVisits ?? []);
-  const [duplicateCandidates, setDuplicateCandidates] = useState<DuplicateCandidateRow[]>(profile?.duplicateCandidates ?? []);
+  const [profile, setProfile] = useState<PatientProfileData | null>(null);
+  const [appointments, setAppointments] = useState<Appointment[]>([]);
+  const [tasks, setTasks] = useState<ClinicalTaskRow[]>([]);
+  const [orders, setOrders] = useState<DiagnosticOrderRow[]>([]);
+  const [referrals, setReferrals] = useState<ReferralRow[]>([]);
+  const [admissions, setAdmissions] = useState<AdmissionRow[]>([]);
+  const [perinatalEntries, setPerinatalEntries] = useState<PregnantRegistryRow[]>([]);
+  const [patronageVisits, setPatronageVisits] = useState<PatronageRow[]>([]);
+  const [duplicateCandidates, setDuplicateCandidates] = useState<DuplicateCandidateRow[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [currentUserName, setCurrentUserName] = useState("Clinical user");
   const [note, setNote] = useState("");
   const [assessment, setAssessment] = useState("");
   const [saveState, setSaveState] = useState<"idle" | "saved">("idle");
 
   useEffect(() => {
-    setAppointments(profile?.appointments ?? []);
-    setTasks(profile?.tasks ?? []);
-    setOrders(profile?.diagnosticOrders ?? []);
-    setReferrals(profile?.referrals ?? []);
-    setAdmissions(profile?.admissions ?? []);
-    setPerinatalEntries(profile?.perinatalEntries ?? []);
-    setPatronageVisits(profile?.patronageVisits ?? []);
-    setDuplicateCandidates(profile?.duplicateCandidates ?? []);
-  }, [profile?.patient.id]);
+    let active = true;
+    const query = `patient=${encodeURIComponent(String(patientId))}`;
 
-  useEffect(() => {
-    const saved = globalThis.localStorage?.getItem(`crm-patient-profile-note:${patientId}`);
-    if (!saved) {
-      setNote("");
-      setAssessment("");
-      setSaveState("idle");
-      return;
-    }
-    try {
-      const parsed = JSON.parse(saved) as { note?: string; assessment?: string };
-      setNote(parsed.note ?? "");
-      setAssessment(parsed.assessment ?? "");
-      setSaveState("idle");
-    } catch {
-      setNote("");
-      setAssessment("");
-      setSaveState("idle");
-    }
+    setLoading(true);
+    setError("");
+    Promise.all([
+      getPatient(patientId),
+      listAppointments(query),
+      listEncounters(query),
+      listPatientVitals(query),
+      listPatientAllergies(query),
+      listCareTeamMemberships(`${query}&active=true`),
+      listClinicalTasks(query),
+      listReferrals(query),
+      listDiagnosticOrders(query),
+      listAdmissions(query),
+      listPerinatalRegistry(query),
+      listPatronageVisits(query),
+      listPatientDuplicateCandidates(query),
+      listMedicalRecords(query),
+      getCurrentUser(),
+    ])
+      .then(
+        ([
+          backendPatient,
+          appointmentResponse,
+          encounterResponse,
+          vitalResponse,
+          allergyResponse,
+          careTeamResponse,
+          taskResponse,
+          referralResponse,
+          orderResponse,
+          admissionResponse,
+          perinatalResponse,
+          patronageResponse,
+          duplicateResponse,
+          recordResponse,
+          currentUser,
+        ]) => {
+          if (!active) {
+            return;
+          }
+
+          const nextProfile: PatientProfileData = {
+            patient: patientToRegistry(backendPatient),
+            appointments: appointmentResponse.results.map(appointmentToRow),
+            encounters: encounterResponse.results.map(encounterToRow),
+            vitals: vitalResponse.results.map(vitalToRow),
+            allergies: allergyResponse.results.map(allergyToRow),
+            careTeam: careTeamResponse.results.map(careTeamToRow),
+            tasks: taskResponse.results.map(taskToRow),
+            referrals: referralResponse.results.map(referralToRow),
+            diagnosticOrders: orderResponse.results.map(orderToRow),
+            admissions: admissionResponse.results.map(admissionToRow),
+            perinatalEntries: perinatalResponse.results.map(perinatalToRow),
+            patronageVisits: patronageResponse.results.map(patronageToRow),
+            duplicateCandidates: duplicateResponse.results.map(duplicateToRow),
+            prescriptions: prescriptionRows(recordResponse.results),
+            documents: documentRows(recordResponse.results),
+          };
+
+          setProfile(nextProfile);
+          setAppointments(nextProfile.appointments);
+          setTasks(nextProfile.tasks);
+          setOrders(nextProfile.diagnosticOrders);
+          setReferrals(nextProfile.referrals);
+          setAdmissions(nextProfile.admissions);
+          setPerinatalEntries(nextProfile.perinatalEntries);
+          setPatronageVisits(nextProfile.patronageVisits);
+          setDuplicateCandidates(nextProfile.duplicateCandidates);
+          setCurrentUserName(currentUser.display_name || currentUser.username);
+          setNote("");
+          setAssessment("");
+          setSaveState("idle");
+        },
+      )
+      .catch((loadError) => {
+        if (!active) {
+          return;
+        }
+        setProfile(null);
+        setError(loadError instanceof Error ? loadError.message : "Patient profile could not be loaded.");
+      })
+      .finally(() => {
+        if (active) {
+          setLoading(false);
+        }
+      });
+
+    return () => {
+      active = false;
+    };
   }, [patientId]);
 
   const latestVital = useMemo(() => profile?.vitals[0], [profile]);
   const activeAllergies = useMemo(() => profile?.allergies.filter((allergy) => allergy.status === "Faol") ?? [], [profile]);
 
+  if (loading) {
+    return (
+      <section className="rounded-md border border-clinical-line bg-white p-6 shadow-sm">
+        <h2 className="text-base font-semibold text-clinical-ink">Bemor profili yuklanmoqda</h2>
+        <p className="mt-2 text-sm text-clinical-slate">Backend klinik ma'lumotlari olinmoqda.</p>
+      </section>
+    );
+  }
+
   if (!profile) {
     return (
       <section className="rounded-md border border-clinical-line bg-white p-6 shadow-sm">
         <h2 className="text-base font-semibold text-clinical-ink">Bemor topilmadi</h2>
+        {error ? <p className="mt-2 text-sm text-clinical-slate">{error}</p> : null}
         <Link href="/doctor" className="mt-4 inline-flex h-10 items-center rounded-md bg-clinical-blue px-4 text-sm font-semibold text-white">
           Ro'yxatga qaytish
         </Link>
@@ -164,37 +777,152 @@ export function PatientProfile({ patientId }: PatientProfileProps) {
     );
   }
 
-  const saveClinicalNote = () => {
-    globalThis.localStorage?.setItem(
-      `crm-patient-profile-note:${profile.patient.id}`,
-      JSON.stringify({ patientId: profile.patient.id, note, assessment, savedAt: new Date().toISOString() }),
-    );
-    setSaveState("saved");
+  const saveClinicalNote = async () => {
+    if (!note.trim() && !assessment.trim()) {
+      return;
+    }
+    try {
+      await createMedicalRecord({
+        patient: profile.patient.id,
+        doctor_id: currentUserName,
+        diagnosis: profile.patient.clinicalDiagnosis,
+        prescriptions: "",
+        clinical_notes: [`Shikoyat va ko'rik: ${note.trim()}`, `Baholash va reja: ${assessment.trim()}`].join("\n"),
+        record_type: "FOLLOW_UP",
+        imaging_safety_metadata: {
+          source: "patient_profile_note",
+          patient_snapshot: {
+            medical_card: profile.patient.medicalCard,
+            risk_zone: profile.patient.riskZone,
+          },
+        },
+      });
+      setSaveState("saved");
+      setError("");
+    } catch (saveError) {
+      setError(saveError instanceof Error ? saveError.message : "Clinical note could not be saved.");
+    }
   };
 
-  const updateAppointment = (appointmentId: number, status: Appointment["status"]) => {
-    setAppointments((current) => current.map((appointment) => (appointment.id === appointmentId ? { ...appointment, status } : appointment)));
+  const updateAppointment = async (appointmentId: number, status: Appointment["status"]) => {
+    try {
+      const response =
+        status === "Bajarildi"
+          ? await completeAppointment(appointmentId)
+          : status === "Bekor qilingan"
+            ? await cancelAppointment(appointmentId, "Cancelled from patient profile")
+            : await startAppointment(appointmentId);
+      const row = appointmentToRow(response.appointment);
+      setAppointments((current) => current.map((appointment) => (appointment.id === appointmentId ? row : appointment)));
+      setError("");
+    } catch (actionError) {
+      setError(actionError instanceof Error ? actionError.message : "Appointment could not be updated.");
+    }
   };
-  const updateTask = (taskId: number, status: ClinicalTaskRow["status"]) => {
-    setTasks((current) => current.map((task) => (task.id === taskId ? { ...task, status } : task)));
+  const updateTask = async (taskId: number, status: ClinicalTaskRow["status"]) => {
+    try {
+      const task =
+        status === "Jarayonda"
+          ? await startClinicalTask(taskId)
+          : status === "Bajarildi"
+            ? await completeClinicalTask(taskId)
+            : await cancelClinicalTask(taskId);
+      const row = taskToRow(task);
+      setTasks((current) => current.map((item) => (item.id === taskId ? row : item)));
+      setError("");
+    } catch (actionError) {
+      setError(actionError instanceof Error ? actionError.message : "Task could not be updated.");
+    }
   };
-  const updateOrder = (orderId: number, status: DiagnosticOrderRow["status"]) => {
-    setOrders((current) => current.map((order) => (order.id === orderId ? { ...order, status } : order)));
+  const updateOrder = async (orderId: number, status: DiagnosticOrderRow["status"]) => {
+    try {
+      const order =
+        status === "Olingan"
+          ? await collectDiagnosticOrder(orderId)
+          : status === "Natija tayyor"
+            ? await resultDiagnosticOrder(orderId, "Natija profil orqali belgilandi.")
+            : await cancelDiagnosticOrder(orderId, "Cancelled from patient profile");
+      const row = orderToRow(order);
+      setOrders((current) => current.map((item) => (item.id === orderId ? row : item)));
+      setError("");
+    } catch (actionError) {
+      setError(actionError instanceof Error ? actionError.message : "Diagnostic order could not be updated.");
+    }
   };
-  const updateReferral = (referralId: number, status: ReferralRow["status"]) => {
-    setReferrals((current) => current.map((referral) => (referral.id === referralId ? { ...referral, status } : referral)));
+  const updateReferral = async (referralId: number, status: ReferralRow["status"]) => {
+    try {
+      const referral =
+        status === "Qabul qilindi"
+          ? await acceptReferral(referralId)
+          : status === "Bajarildi"
+            ? await completeReferral(referralId, "Completed from patient profile.")
+            : await cancelReferral(referralId, "Cancelled from patient profile");
+      const row = referralToRow(referral);
+      setReferrals((current) => current.map((item) => (item.id === referralId ? row : item)));
+      setError("");
+    } catch (actionError) {
+      setError(actionError instanceof Error ? actionError.message : "Referral could not be updated.");
+    }
   };
-  const updateAdmission = (admissionId: number, status: AdmissionRow["status"]) => {
-    setAdmissions((current) => current.map((admission) => (admission.id === admissionId ? { ...admission, status } : admission)));
+  const updateAdmission = async (admissionId: number, status: AdmissionRow["status"]) => {
+    try {
+      const admission =
+        status === "Navbat"
+          ? await waitlistAdmission(admissionId)
+          : status === "Yotqizildi"
+            ? await admitAdmission(admissionId)
+            : await dischargeAdmission(admissionId, "Discharged from patient profile.");
+      const row = admissionToRow(admission);
+      setAdmissions((current) => current.map((item) => (item.id === admissionId ? row : item)));
+      setError("");
+    } catch (actionError) {
+      setError(actionError instanceof Error ? actionError.message : "Admission could not be updated.");
+    }
   };
-  const updatePerinatal = (entryId: number, status: PregnantRegistryRow["status"]) => {
-    setPerinatalEntries((current) => current.map((entry) => (entry.id === entryId ? { ...entry, status } : entry)));
+  const updatePerinatal = async (entryId: number, status: PregnantRegistryRow["status"]) => {
+    try {
+      const entry =
+        status === "Yopildi"
+          ? await closePerinatalEntry(entryId, "CLOSED", "Closed from patient profile.")
+          : await updatePerinatalRisk(entryId, {
+              risk_level: status === "Yotqizildi" ? "HIGH" : "MODERATE",
+            });
+      const row = perinatalToRow(entry);
+      setPerinatalEntries((current) => current.map((item) => (item.id === entryId ? row : item)));
+      setError("");
+    } catch (actionError) {
+      setError(actionError instanceof Error ? actionError.message : "Perinatal entry could not be updated.");
+    }
   };
-  const updatePatronage = (visitId: number, status: PatronageRow["status"], sync: PatronageRow["sync"]) => {
-    setPatronageVisits((current) => current.map((visit) => (visit.id === visitId ? { ...visit, status, sync } : visit)));
+  const updatePatronage = async (visitId: number, status: PatronageRow["status"], sync: PatronageRow["sync"]) => {
+    try {
+      const visit =
+        status === "Bajarildi"
+          ? await completePatronageVisit(visitId, "Completed from patient profile.")
+          : sync === "Konflikt"
+            ? await syncPatronageVisit(visitId, { conflict_test: true }, 0)
+            : await syncPatronageVisit(visitId);
+      const row = patronageToRow(visit);
+      setPatronageVisits((current) => current.map((item) => (item.id === visitId ? row : item)));
+      setError("");
+    } catch (actionError) {
+      setError(actionError instanceof Error ? actionError.message : "Patronage visit could not be updated.");
+    }
   };
-  const updateDuplicate = (candidateId: number, status: DuplicateCandidateRow["status"]) => {
-    setDuplicateCandidates((current) => current.map((candidate) => (candidate.id === candidateId ? { ...candidate, status } : candidate)));
+  const updateDuplicate = async (candidateId: number, status: DuplicateCandidateRow["status"]) => {
+    try {
+      const candidate =
+        status === "Tasdiqlandi"
+          ? await confirmDuplicateCandidate(candidateId)
+          : status === "Birlashtirildi"
+            ? await markMergedDuplicateCandidate(candidateId)
+            : await dismissDuplicateCandidate(candidateId);
+      const row = duplicateToRow(candidate);
+      setDuplicateCandidates((current) => current.map((item) => (item.id === candidateId ? row : item)));
+      setError("");
+    } catch (actionError) {
+      setError(actionError instanceof Error ? actionError.message : "Duplicate candidate could not be updated.");
+    }
   };
 
   return (
@@ -234,6 +962,12 @@ export function PatientProfile({ patientId }: PatientProfileProps) {
           ))}
         </div>
       </section>
+
+      {error ? (
+        <div className="rounded-md border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+          {error}
+        </div>
+      ) : null}
 
       <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_380px]">
         <main className="min-w-0 space-y-4">
@@ -309,7 +1043,7 @@ export function PatientProfile({ patientId }: PatientProfileProps) {
                 </button>
                 <button
                   type="button"
-                  onClick={saveClinicalNote}
+                  onClick={() => void saveClinicalNote()}
                   className="inline-flex h-10 items-center justify-center gap-2 rounded-md bg-clinical-blue text-sm font-semibold text-white"
                 >
                   <Save className="h-4 w-4" />

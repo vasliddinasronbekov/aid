@@ -79,6 +79,7 @@ from .serializers import (
     StaffProfileSerializer,
 )
 from .services import (
+    broadcast_critical_ai_error,
     broadcast_feedback_submitted,
     feedback_summary_queryset,
     generate_ai_assistant_reply,
@@ -2430,6 +2431,26 @@ class AIErrLogViewSet(TenantScopedQuerysetMixin, AuditReadMixin, viewsets.ModelV
             phi_accessed=False,
         )
         return Response(list(data))
+
+    @action(detail=True, methods=["post"])
+    def escalate(self, request, pk=None):
+        log = self.get_object()
+        broadcast_critical_ai_error(log.medical_record, [log])
+        record_audit_event(
+            action=AuditEvent.Action.UPDATE,
+            actor=request.user,
+            patient=log.medical_record.patient,
+            resource=log,
+            metadata={
+                "operation": "ai_error_log_escalate",
+                "severity": log.severity,
+                "error_type": log.error_type,
+                "medical_record_id": log.medical_record_id,
+            },
+            phi_accessed=True,
+            risk_level=AuditEvent.RiskLevel.HIGH if log.severity == AIErrLog.Severity.CRITICAL else AuditEvent.RiskLevel.MEDIUM,
+        )
+        return Response(self.get_serializer(log).data)
 
 
 class AnonymousFeedbackViewSet(TenantScopedQuerysetMixin, AuditReadMixin, viewsets.ModelViewSet):
