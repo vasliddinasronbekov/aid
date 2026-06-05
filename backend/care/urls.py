@@ -66,5 +66,6 @@ urlpatterns = [
     path("auth/logout/", LogoutView.as_view(), name="auth-logout"),
     path("auth/register/", RegisterView.as_view(), name="auth-register"),
     path("feedback-doctors/", PublicFeedbackDoctorListView.as_view(), name="public-feedback-doctors"),
+    path("feedback/public-doctors/", PublicFeedbackDoctorListView.as_view(), name="legacy-public-feedback-doctors"),
     *router.urls,
 ]
