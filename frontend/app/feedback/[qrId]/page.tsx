@@ -1,11 +1,13 @@
 "use client";
 
-import { CheckCircle2, Loader2, MessageSquareText, Phone, ShieldCheck, Star } from "lucide-react";
+import { CheckCircle2, Loader2, MessageSquareText, Phone, Search, ShieldCheck, Star, Stethoscope } from "lucide-react";
 import { useParams } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 
-import { requestFeedbackPhoneVerification, submitFeedback, verifyFeedbackPhone } from "@/lib/api";
-import type { FeedbackPayload } from "@/lib/api";
+import { listPublicFeedbackDoctors, submitFeedback } from "@/lib/api";
+import type { FeedbackPayload, PublicFeedbackDoctor } from "@/lib/api";
+
+type FeedbackTarget = Extract<FeedbackPayload["target_type"], "ROOM" | "DOCTOR">;
 
 function parseQrId(qrId: string) {
   const normalized = qrId.replace(/_/g, "-");
@@ -35,18 +37,23 @@ const categories = [
   { label: "Praise", value: "PRAISE" },
 ] as const;
 
+function targetSlug(value: string) {
+  return value.toLowerCase().replace(/[^a-z0-9:-]+/g, "-").replace(/^-+|-+$/g, "") || "manual";
+}
+
 export default function PatientFeedbackPage() {
   const params = useParams<{ qrId: string }>();
   const qrId = decodeURIComponent(params.qrId);
   const roomContext = useMemo(() => parseQrId(qrId), [qrId]);
 
   const [anonymousSessionId, setAnonymousSessionId] = useState("");
+  const [targetType, setTargetType] = useState<FeedbackTarget>(roomContext.targetType);
+  const [doctors, setDoctors] = useState<PublicFeedbackDoctor[]>([]);
+  const [doctorSearch, setDoctorSearch] = useState("");
+  const [selectedDoctorId, setSelectedDoctorId] = useState<string | null>(null);
+  const [loadingDoctors, setLoadingDoctors] = useState(true);
+  const [doctorLoadError, setDoctorLoadError] = useState("");
   const [phoneNumber, setPhoneNumber] = useState("");
-  const [verificationCode, setVerificationCode] = useState("");
-  const [challengeId, setChallengeId] = useState("");
-  const [verificationToken, setVerificationToken] = useState("");
-  const [debugCode, setDebugCode] = useState("");
-  const [verificationStatus, setVerificationStatus] = useState<"idle" | "sending" | "code" | "verified">("idle");
   const [rating, setRating] = useState(0);
   const [category, setCategory] = useState<(typeof categories)[number]["value"]>("COMPLAINT");
   const [comment, setComment] = useState("");
@@ -58,48 +65,80 @@ export default function PatientFeedbackPage() {
     setAnonymousSessionId(token);
   }, []);
 
-  const requestCode = async () => {
-    if (!phoneNumber.trim()) {
-      return;
-    }
-    setErrorMessage("");
-    setChallengeId("");
-    setVerificationToken("");
-    setVerificationStatus("sending");
-    try {
-      const response = await requestFeedbackPhoneVerification({
-        phone_number: phoneNumber,
-        target_type: roomContext.targetType,
-        room_qr_id: roomContext.targetType === "ROOM" ? qrId : undefined,
-        target_staff_profile: roomContext.targetStaffProfile,
-      });
-      setChallengeId(response.challenge_id);
-      setDebugCode(response.debug_verification_code ?? "");
-      setVerificationStatus("code");
-    } catch (error) {
-      setVerificationStatus("idle");
-      setErrorMessage(error instanceof Error ? error.message : "Unable to send verification code.");
-    }
-  };
+  useEffect(() => {
+    setTargetType(roomContext.targetType);
+  }, [roomContext.targetType]);
 
-  const verifyCode = async () => {
-    if (!challengeId || !verificationCode.trim()) {
-      return;
+  useEffect(() => {
+    let active = true;
+
+    setLoadingDoctors(true);
+    listPublicFeedbackDoctors()
+      .then((items) => {
+        if (!active) {
+          return;
+        }
+        setDoctors(items);
+        setDoctorLoadError("");
+        if (roomContext.targetType === "DOCTOR" && roomContext.targetStaffProfile) {
+          const matchedDoctor = items.find((doctor) => doctor.staff_profile_id === roomContext.targetStaffProfile);
+          if (matchedDoctor) {
+            setSelectedDoctorId(matchedDoctor.id);
+          }
+        }
+      })
+      .catch((error) => {
+        if (active) {
+          setDoctorLoadError(error instanceof Error ? error.message : "Doctor list is not available.");
+        }
+      })
+      .finally(() => {
+        if (active) {
+          setLoadingDoctors(false);
+        }
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [roomContext.targetStaffProfile, roomContext.targetType]);
+
+  const filteredDoctors = useMemo(() => {
+    const query = doctorSearch.trim().toLowerCase();
+    if (!query) {
+      return doctors;
     }
-    setErrorMessage("");
-    setVerificationStatus("sending");
-    try {
-      const response = await verifyFeedbackPhone(challengeId, verificationCode);
-      setVerificationToken(response.verification_token);
-      setVerificationStatus("verified");
-    } catch (error) {
-      setVerificationStatus("code");
-      setErrorMessage(error instanceof Error ? error.message : "Invalid verification code.");
-    }
-  };
+    return doctors.filter((doctor) =>
+      [doctor.display_name, doctor.primary_hospital_name, doctor.organization_name, doctor.department_names.join(" ")]
+        .join(" ")
+        .toLowerCase()
+        .includes(query),
+    );
+  }, [doctorSearch, doctors]);
+
+  const selectedDoctor = doctors.find((doctor) => doctor.id === selectedDoctorId);
+  const typedDoctorName = doctorSearch.trim();
+  const fallbackStaffProfileId = roomContext.targetType === "DOCTOR" ? roomContext.targetStaffProfile : undefined;
+  const selectedStaffProfileId = selectedDoctor
+    ? selectedDoctor.staff_profile_id ?? undefined
+    : typedDoctorName
+      ? undefined
+      : fallbackStaffProfileId;
+  const doctorLabel = selectedDoctor?.doctor_label || (selectedStaffProfileId ? "" : typedDoctorName);
+  const doctorDisplayName = selectedDoctor?.display_name || doctorLabel || (selectedStaffProfileId ? roomContext.room : "");
+  const hasDoctorTarget = targetType !== "DOCTOR" || Boolean(selectedStaffProfileId || doctorLabel);
+  const canSubmit =
+    Boolean(rating && anonymousSessionId && phoneNumber.trim() && comment.trim() && hasDoctorTarget) && status !== "sending";
 
   const handleSubmit = async () => {
-    if (!rating || !anonymousSessionId || !challengeId || !verificationToken) {
+    const normalizedPhone = phoneNumber.trim();
+    const normalizedComment = comment.trim();
+    const phoneDigits = normalizedPhone.replace(/\D/g, "");
+    if (!canSubmit || !normalizedPhone || !normalizedComment) {
+      return;
+    }
+    if (phoneDigits.length < 8 || phoneDigits.length > 15) {
+      setErrorMessage("Enter a valid phone number.");
       return;
     }
 
@@ -108,18 +147,18 @@ export default function PatientFeedbackPage() {
 
     setStatus("sending");
     const payload = {
-      target_type: roomContext.targetType,
-      target_staff_profile: roomContext.targetStaffProfile,
-      department: roomContext.department,
-      room_qr_id: qrId,
+      target_type: targetType,
+      target_staff_profile: targetType === "DOCTOR" ? selectedStaffProfileId : undefined,
+      target_doctor_label: targetType === "DOCTOR" && !selectedStaffProfileId ? doctorLabel : undefined,
+      department: targetType === "DOCTOR" ? selectedDoctor?.department_names[0] || "Doctor feedback" : roomContext.department,
+      room_qr_id: targetType === "DOCTOR" ? `doctor-${targetSlug(selectedDoctor?.id || doctorLabel || String(selectedStaffProfileId ?? ""))}` : qrId,
       anonymous_session_id: anonymousSessionId,
-      phone_verification_challenge: challengeId,
-      phone_verification_token: verificationToken,
+      phone_number: normalizedPhone,
       category,
       severity,
       language: "en",
       rating,
-      comment,
+      comment: normalizedComment,
     };
 
     try {
@@ -132,10 +171,12 @@ export default function PatientFeedbackPage() {
   };
 
   const submitted = status === "sent" || status === "queued";
+  const contextLabel =
+    targetType === "DOCTOR" ? doctorDisplayName || "Doctor feedback" : `${roomContext.department}, room ${roomContext.room}`;
 
   return (
     <main className="min-h-screen bg-clinical-wash px-4 py-5">
-      <section className="mx-auto max-w-md rounded-md border border-clinical-line bg-white shadow-clinical">
+      <section className="mx-auto max-w-xl rounded-md border border-clinical-line bg-white shadow-clinical">
         <div className="border-b border-clinical-line px-5 py-5">
           <div className="flex items-center gap-3">
             <div className="flex h-10 w-10 items-center justify-center rounded-md bg-clinical-blue text-white">
@@ -143,9 +184,7 @@ export default function PatientFeedbackPage() {
             </div>
             <div>
               <h1 className="text-lg font-semibold text-clinical-ink">Patient feedback</h1>
-              <p className="text-sm text-clinical-slate">
-                {roomContext.targetType === "DOCTOR" ? roomContext.room : `${roomContext.department}, room ${roomContext.room}`}
-              </p>
+              <p className="text-sm text-clinical-slate">{contextLabel}</p>
             </div>
           </div>
         </div>
@@ -164,63 +203,99 @@ export default function PatientFeedbackPage() {
           </div>
         ) : (
           <div className="space-y-6 px-5 py-6">
+            <div>
+              <span className="mb-2 block text-sm font-medium text-clinical-ink">Target</span>
+              <div className="grid grid-cols-2 gap-2">
+                {[
+                  { label: "Room", value: "ROOM" as const },
+                  { label: "Doctor", value: "DOCTOR" as const },
+                ].map((item) => (
+                  <button
+                    key={item.value}
+                    type="button"
+                    onClick={() => setTargetType(item.value)}
+                    className={`h-10 rounded-md border px-3 text-sm font-medium ${
+                      targetType === item.value
+                        ? "border-clinical-blue bg-blue-50 text-clinical-blue"
+                        : "border-clinical-line bg-white text-clinical-slate"
+                    }`}
+                  >
+                    {item.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {targetType === "DOCTOR" ? (
+              <div className="rounded-md border border-clinical-line">
+                <div className="border-b border-clinical-line p-3">
+                  <div className="relative">
+                    <Search className="pointer-events-none absolute left-3 top-2.5 h-4 w-4 text-clinical-slate" />
+                    <input
+                      value={doctorSearch}
+                      onChange={(event) => {
+                        setDoctorSearch(event.target.value);
+                        setSelectedDoctorId(null);
+                      }}
+                      className="h-9 w-full rounded-md border border-clinical-line bg-white pl-9 pr-3 text-sm text-clinical-ink outline-none focus:border-clinical-blue"
+                      placeholder="Search or type doctor name"
+                    />
+                  </div>
+                </div>
+                <div className="max-h-56 divide-y divide-clinical-line overflow-y-auto">
+                  {filteredDoctors.slice(0, 12).map((doctor) => {
+                    const selected = doctor.id === selectedDoctorId;
+                    return (
+                      <button
+                        key={doctor.id}
+                        type="button"
+                        onClick={() => setSelectedDoctorId(doctor.id)}
+                        className={`block w-full px-3 py-3 text-left ${selected ? "bg-blue-50" : "bg-white hover:bg-slate-50"}`}
+                      >
+                        <div className="flex items-start gap-3">
+                          <div
+                            className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-md ${
+                              selected ? "bg-clinical-blue text-white" : "bg-slate-100 text-clinical-slate"
+                            }`}
+                          >
+                            <Stethoscope className="h-4 w-4" />
+                          </div>
+                          <div className="min-w-0">
+                            <h2 className="text-sm font-semibold text-clinical-ink">{doctor.display_name}</h2>
+                            <p className="mt-1 text-xs text-clinical-slate">{doctor.primary_hospital_name || doctor.organization_name}</p>
+                            <p className="mt-1 line-clamp-1 text-xs text-clinical-slate">
+                              {doctor.department_names.join(", ") || doctor.role}
+                              {doctor.source === "medical_record" ? ` · ${doctor.record_count ?? 1} records` : ""}
+                            </p>
+                          </div>
+                        </div>
+                      </button>
+                    );
+                  })}
+                  {!filteredDoctors.length ? (
+                    <div className="px-3 py-6 text-sm text-clinical-slate">{loadingDoctors ? "Loading doctors" : "No matching doctors."}</div>
+                  ) : null}
+                </div>
+                {doctorLoadError ? <p className="border-t border-clinical-line px-3 py-2 text-xs text-red-700">{doctorLoadError}</p> : null}
+              </div>
+            ) : null}
+
             <div className="rounded-md border border-clinical-line bg-slate-50 p-3">
               <div className="mb-3 flex items-center gap-2 text-sm font-medium text-clinical-ink">
                 <Phone className="h-4 w-4 text-clinical-blue" />
-                Phone verification
+                Phone number
               </div>
-              <div className="grid gap-2">
-                <input
-                  value={phoneNumber}
-                  onChange={(event) => {
-                    setPhoneNumber(event.target.value);
-                    setVerificationToken("");
-                  }}
-                  type="tel"
-                  className="h-11 rounded-md border border-clinical-line bg-white px-3 text-base text-clinical-ink focus:border-clinical-blue"
-                  placeholder="+998901234567"
-                  disabled={verificationStatus === "verified"}
-                />
-                {verificationStatus === "code" || (verificationStatus === "sending" && challengeId) ? (
-                  <input
-                    value={verificationCode}
-                    onChange={(event) => setVerificationCode(event.target.value)}
-                    inputMode="numeric"
-                    className="h-11 rounded-md border border-clinical-line bg-white px-3 text-base text-clinical-ink focus:border-clinical-blue"
-                    placeholder="Verification code"
-                  />
-                ) : null}
-              </div>
-              {debugCode ? <p className="mt-2 text-xs text-clinical-slate">Dev code: {debugCode}</p> : null}
+              <input
+                value={phoneNumber}
+                onChange={(event) => {
+                  setPhoneNumber(event.target.value);
+                  setErrorMessage("");
+                }}
+                type="tel"
+                className="h-11 w-full rounded-md border border-clinical-line bg-white px-3 text-base text-clinical-ink focus:border-clinical-blue"
+                placeholder="+998901234567"
+              />
               {errorMessage ? <p className="mt-2 text-xs text-red-700">{errorMessage}</p> : null}
-              <div className="mt-3 flex gap-2">
-                {verificationStatus === "verified" ? (
-                  <span className="inline-flex h-10 items-center gap-2 rounded-md border border-emerald-200 bg-emerald-50 px-3 text-sm font-semibold text-clinical-green">
-                    <ShieldCheck className="h-4 w-4" />
-                    Verified
-                  </span>
-                ) : verificationStatus === "code" || (verificationStatus === "sending" && challengeId) ? (
-                  <button
-                    type="button"
-                    onClick={verifyCode}
-                    disabled={verificationStatus === "sending"}
-                    className="inline-flex h-10 flex-1 items-center justify-center gap-2 rounded-md bg-clinical-blue px-3 text-sm font-semibold text-white disabled:bg-slate-300"
-                  >
-                    {verificationStatus === "sending" ? <Loader2 className="h-4 w-4 animate-spin" /> : <ShieldCheck className="h-4 w-4" />}
-                    Verify
-                  </button>
-                ) : (
-                  <button
-                    type="button"
-                    onClick={requestCode}
-                    disabled={!phoneNumber.trim() || verificationStatus === "sending"}
-                    className="inline-flex h-10 flex-1 items-center justify-center gap-2 rounded-md bg-clinical-blue px-3 text-sm font-semibold text-white disabled:bg-slate-300"
-                  >
-                    {verificationStatus === "sending" ? <Loader2 className="h-4 w-4 animate-spin" /> : <Phone className="h-4 w-4" />}
-                    Send code
-                  </button>
-                )}
-              </div>
             </div>
 
             <div>
@@ -281,14 +356,18 @@ export default function PatientFeedbackPage() {
             <div className="rounded-md border border-clinical-line bg-slate-50 px-3 py-3">
               <div className="flex items-start gap-2 text-sm text-clinical-slate">
                 <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0 text-clinical-green" />
-                <span>Session {anonymousSessionId.slice(0, 8) || "creating"}</span>
+                <span>
+                  {targetType === "DOCTOR" && doctorDisplayName
+                    ? `${doctorDisplayName} · session ${anonymousSessionId.slice(0, 8)}`
+                    : `Session ${anonymousSessionId.slice(0, 8) || "creating"}`}
+                </span>
               </div>
             </div>
 
             <button
               type="button"
               onClick={handleSubmit}
-              disabled={!rating || !verificationToken || status === "sending"}
+              disabled={!canSubmit}
               className="flex w-full items-center justify-center gap-2 rounded-md bg-clinical-blue px-4 py-3 text-base font-semibold text-white shadow-sm transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-slate-300"
             >
               {status === "sending" ? <Loader2 className="h-5 w-5 animate-spin" /> : <CheckCircle2 className="h-5 w-5" />}

@@ -28,6 +28,10 @@ function severityFor(category: FeedbackPayload["category"], rating: number): Fee
   return "LOW";
 }
 
+function targetSlug(value: string) {
+  return value.toLowerCase().replace(/[^a-z0-9:-]+/g, "-").replace(/^-+|-+$/g, "") || "manual";
+}
+
 export default function DoctorFeedbackPage() {
   const [sessionId, setSessionId] = useState("");
   const [doctors, setDoctors] = useState<PublicFeedbackDoctor[]>([]);
@@ -85,28 +89,40 @@ export default function DoctorFeedbackPage() {
   }, [doctorSearch, doctors]);
 
   const selectedDoctor = doctors.find((doctor) => doctor.id === selectedDoctorId);
-  const canSubmit = selectedDoctor && phoneNumber.trim() && rating > 0 && comment.trim() && sessionId && status !== "sending";
+  const typedDoctorName = doctorSearch.trim();
+  const selectedDoctorName = selectedDoctor?.display_name || typedDoctorName;
+  const canSubmit = Boolean(selectedDoctorName && phoneNumber.trim() && rating > 0 && comment.trim() && sessionId && status !== "sending");
 
   const handleSubmit = async () => {
-    if (!selectedDoctor || !canSubmit) {
+    const normalizedPhone = phoneNumber.trim();
+    const normalizedComment = comment.trim();
+    const phoneDigits = normalizedPhone.replace(/\D/g, "");
+    const doctorLabel = selectedDoctor?.doctor_label || typedDoctorName;
+
+    if (!doctorLabel || !canSubmit) {
       return;
     }
+    if (phoneDigits.length < 8 || phoneDigits.length > 15) {
+      setErrorMessage("Enter a valid phone number.");
+      return;
+    }
+
     setStatus("sending");
     setErrorMessage("");
     try {
       await submitFeedback({
         target_type: "DOCTOR",
-        target_staff_profile: selectedDoctor.staff_profile_id ?? undefined,
-        target_doctor_label: selectedDoctor.staff_profile_id ? undefined : selectedDoctor.doctor_label,
-        department: selectedDoctor.department_names[0] || "Doctor feedback",
-        room_qr_id: `doctor-${selectedDoctor.id}`,
+        target_staff_profile: selectedDoctor?.staff_profile_id ?? undefined,
+        target_doctor_label: selectedDoctor?.staff_profile_id ? undefined : doctorLabel,
+        department: selectedDoctor?.department_names[0] || "Doctor feedback",
+        room_qr_id: `doctor-${targetSlug(selectedDoctor?.id || doctorLabel)}`,
         anonymous_session_id: sessionId,
-        phone_number: phoneNumber,
+        phone_number: normalizedPhone,
         category,
         severity: severityFor(category, rating),
         language: "uz-Latn",
         rating,
-        comment,
+        comment: normalizedComment,
       });
       setStatus("sent");
     } catch (error) {
@@ -151,9 +167,12 @@ export default function DoctorFeedbackPage() {
                 <Search className="pointer-events-none absolute left-3 top-2.5 h-4 w-4 text-clinical-slate" />
                 <input
                   value={doctorSearch}
-                  onChange={(event) => setDoctorSearch(event.target.value)}
+                  onChange={(event) => {
+                    setDoctorSearch(event.target.value);
+                    setSelectedDoctorId(null);
+                  }}
                   className="h-9 w-full rounded-md border border-clinical-line bg-white pl-9 pr-3 text-sm text-clinical-ink outline-none focus:border-clinical-blue"
-                  placeholder="Search doctor"
+                  placeholder="Search or type doctor name"
                 />
               </div>
             </div>
@@ -184,7 +203,7 @@ export default function DoctorFeedbackPage() {
                 );
               })}
               {!filteredDoctors.length ? (
-                <div className="px-3 py-8 text-sm text-clinical-slate">{loadingDoctors ? "Loading doctors" : "No doctors found."}</div>
+                <div className="px-3 py-8 text-sm text-clinical-slate">{loadingDoctors ? "Loading doctors" : "No matching doctors."}</div>
               ) : null}
             </div>
           </section>
@@ -197,7 +216,10 @@ export default function DoctorFeedbackPage() {
               </span>
               <input
                 value={phoneNumber}
-                onChange={(event) => setPhoneNumber(event.target.value)}
+                onChange={(event) => {
+                  setPhoneNumber(event.target.value);
+                  setErrorMessage("");
+                }}
                 type="tel"
                 className="h-11 w-full rounded-md border border-clinical-line bg-white px-3 text-base text-clinical-ink outline-none focus:border-clinical-blue"
                 placeholder="+998901234567"
@@ -258,7 +280,7 @@ export default function DoctorFeedbackPage() {
             <div className="rounded-md border border-clinical-line bg-slate-50 px-3 py-3">
               <div className="flex items-start gap-2 text-sm text-clinical-slate">
                 <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0 text-clinical-green" />
-                <span>{selectedDoctor ? `${selectedDoctor.display_name} · session ${sessionId.slice(0, 8)}` : `Session ${sessionId.slice(0, 8) || "creating"}`}</span>
+                <span>{selectedDoctorName ? `${selectedDoctorName} · session ${sessionId.slice(0, 8)}` : `Session ${sessionId.slice(0, 8) || "creating"}`}</span>
               </div>
             </div>
 
