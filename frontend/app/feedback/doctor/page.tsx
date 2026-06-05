@@ -42,6 +42,7 @@ export default function DoctorFeedbackPage() {
   const [category, setCategory] = useState<FeedbackPayload["category"]>("COMPLAINT");
   const [comment, setComment] = useState("");
   const [loadingDoctors, setLoadingDoctors] = useState(true);
+  const [doctorLoadError, setDoctorLoadError] = useState("");
   const [status, setStatus] = useState<"idle" | "sending" | "sent">("idle");
   const [errorMessage, setErrorMessage] = useState("");
 
@@ -57,11 +58,12 @@ export default function DoctorFeedbackPage() {
       .then((items) => {
         if (active) {
           setDoctors(items);
+          setDoctorLoadError("");
         }
       })
       .catch((error) => {
         if (active) {
-          setErrorMessage(error instanceof Error ? error.message : "Doctor list is not available.");
+          setDoctorLoadError(error instanceof Error ? error.message : "Doctor list is not available.");
         }
       })
       .finally(() => {
@@ -170,6 +172,7 @@ export default function DoctorFeedbackPage() {
                   onChange={(event) => {
                     setDoctorSearch(event.target.value);
                     setSelectedDoctorId(null);
+                    setDoctorLoadError("");
                   }}
                   className="h-9 w-full rounded-md border border-clinical-line bg-white pl-9 pr-3 text-sm text-clinical-ink outline-none focus:border-clinical-blue"
                   placeholder="Search or type doctor name"
@@ -206,6 +209,7 @@ export default function DoctorFeedbackPage() {
                 <div className="px-3 py-8 text-sm text-clinical-slate">{loadingDoctors ? "Loading doctors" : "No matching doctors."}</div>
               ) : null}
             </div>
+            {doctorLoadError ? <p className="border-t border-clinical-line px-3 py-2 text-xs text-clinical-slate">Type the doctor name manually.</p> : null}
           </section>
 
           <section className="space-y-5">

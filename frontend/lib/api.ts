@@ -1237,9 +1237,13 @@ export function updateFeedback(feedbackId: number, payload: Partial<Pick<Anonymo
   });
 }
 
-export function listPublicFeedbackDoctors(query = "") {
+export async function listPublicFeedbackDoctors(query = "") {
   const suffix = query ? `?${query}` : "";
-  return apiFetch<PublicFeedbackDoctor[]>(`/feedback-doctors/${suffix}`);
+  try {
+    return await apiFetch<PublicFeedbackDoctor[]>(`/feedback-doctors/${suffix}`);
+  } catch {
+    return apiFetch<PublicFeedbackDoctor[]>(`/feedback/public-doctors/${suffix}`);
+  }
 }
 
 export function requestFeedbackPhoneVerification(payload: PhoneVerificationRequestPayload) {
